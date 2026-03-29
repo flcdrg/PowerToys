@@ -232,6 +232,9 @@
   <data name="MouseWithoutBorders_DeviceLayoutSettings.Description" xml:space="preserve">
     <value>Drag and drop a machine to rearrange the order.</value>
   </data>
+  <data name="MWB_DisplayArrangement_NoDisplaysText.Text" xml:space="preserve">
+    <value>Display information unavailable.</value>
+  </data>
   <data name="MouseWithoutBorders_CannotDragDropAsAdmin.Title" xml:space="preserve">
     <value>It is not possible to use drag and drop while running PowerToys elevated. As a workaround, please restart PowerToys without elevation to edit the device layout.</value>
   </data>

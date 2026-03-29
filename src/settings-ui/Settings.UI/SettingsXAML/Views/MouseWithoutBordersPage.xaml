@@ -14,6 +14,7 @@
     mc:Ignorable="d">
     <local:NavigablePage.Resources>
         <tkconverters:BoolToVisibilityConverter x:Key="negativeBoolToVisibilityConverter" />
+        <tkconverters:BoolToVisibilityConverter x:Key="boolToVisibilityConverter" />
         <tkconverters:BoolToObjectConverter
             x:Key="OneRowMatrixBoolToNumberOfRowsConverter"
             FalseValue="2"
@@ -106,6 +107,20 @@
                         Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
                         ContentAlignment="Vertical">
                         <StackPanel Orientation="Vertical" Spacing="8">
+                            <!--
+                                Multi-display layout panel: shown when the current machine has ≥2 monitors.
+                                Users drag machine slots onto the edges of individual displays.
+                            -->
+                            <controls:DisplayArrangementPanel
+                                x:Name="MultiDisplayPanel"
+                                MinHeight="180"
+                                ViewModel="{x:Bind ViewModel, Mode=OneTime}"
+                                Visibility="{x:Bind ViewModel.HasMultipleDisplays, Mode=OneWay, Converter={StaticResource boolToVisibilityConverter}}" />
+
+                            <!--
+                                Legacy flat-grid: shown on single-monitor machines, or as the
+                                drag source for the multi-display panel on multi-monitor machines.
+                            -->
                             <ItemsControl
                                 x:Name="DevicesItemsControl"
                                 HorizontalAlignment="Center"

@@ -150,6 +150,14 @@ namespace Microsoft.PowerToys.Settings.UI.Library
         [CmdConfigureIgnoreAttribute]
         public IntProperty TCPPort { get; set; }
 
+        /// <summary>
+        /// Gets or sets the display-aware layout configuration.
+        /// Null when the user has not configured a multi-display layout (falls back to flat MatrixOneRow grid).
+        /// </summary>
+        [CmdConfigureIgnoreAttribute]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public MouseWithoutBordersDisplayLayoutConfiguration DisplayLayout { get; set; }
+
         [JsonConverter(typeof(BoolPropertyJsonConverter))]
         public bool DrawMouseEx { get; set; }
 

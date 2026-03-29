@@ -95,6 +95,7 @@ namespace Microsoft.PowerToys.Settings.UI.Views
         {
             args.Data.RequestedOperation = DataPackageOperation.Move;
             args.Data.Properties.Add("check-usage", MouseWithoutBordersDragDropCheckString);
+            args.Data.Properties.Add("MWB Device Drag Drop", MouseWithoutBordersDragDropCheckString);
             args.Data.Properties.Add("index", GetDeviceIndex((Border)sender));
         }
 

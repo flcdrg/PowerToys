@@ -1233,6 +1233,187 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
             }
         }
 
+        // ---- Multi-display layout support ----
+
+        private List<DisplayRect> _localDisplays;
+        private DisplayLayoutConfiguration _displayLayout;
+
+        /// <summary>
+        /// Gets the physical display rectangles of the current machine.
+        /// Populated once on demand and cached.
+        /// </summary>
+        public List<DisplayRect> LocalDisplays
+        {
+            get
+            {
+                if (_localDisplays == null)
+                {
+                    try
+                    {
+                        _localDisplays = DisplayDetector.GetDisplays();
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.LogError($"DisplayDetector.GetDisplays failed: {ex}");
+                        _localDisplays = new List<DisplayRect>();
+                    }
+                }
+
+                return _localDisplays;
+            }
+        }
+
+        /// <summary>
+        /// Gets a value indicating whether the current machine has more than one display.
+        /// When false, the legacy flat-grid layout is shown instead.
+        /// </summary>
+        public bool HasMultipleDisplays => LocalDisplays.Count > 1;
+
+        /// <summary>
+        /// Gets or sets the full display-aware layout configuration.
+        /// Syncs back to <see cref="MachineMatrixString"/> on every change.
+        /// </summary>
+        public DisplayLayoutConfiguration DisplayLayout
+        {
+            get
+            {
+                if (_displayLayout == null)
+                {
+                    // Bootstrap from saved settings, or create fresh from detected displays
+                    _displayLayout = Settings.Properties.DisplayLayout;
+
+                    if (_displayLayout == null)
+                    {
+                        _displayLayout = new DisplayLayoutConfiguration
+                        {
+                            Displays = LocalDisplays,
+                            DevicePositions = new List<DisplayLayoutDevicePosition>(),
+                        };
+                    }
+                    else
+                    {
+                        // Refresh displays with current hardware; preserve placements
+                        _displayLayout.Displays = LocalDisplays;
+                        _displayLayout.Sanitize();
+                    }
+                }
+
+                return _displayLayout;
+            }
+        }
+
+        /// <summary>
+        /// Returns scaled display rectangles that fit within the given canvas dimensions.
+        /// </summary>
+        public (List<DisplayRect> Scaled, double Scale) GetScaledDisplays(double canvasWidth, double canvasHeight)
+        {
+            return DisplayDetector.ScaleToCanvas(LocalDisplays, canvasWidth, canvasHeight);
+        }
+
+        /// <summary>
+        /// Assigns a machine to a specific edge of a specific display.
+        /// If the machine is already assigned elsewhere, it is moved.
+        /// Syncs changes back to <see cref="MachineMatrixString"/> and persists.
+        /// </summary>
+        /// <param name="machineName">The remote machine name (empty string to clear the slot).</param>
+        /// <param name="edge">The display edge.</param>
+        /// <param name="displayIndex">Zero-based display index.</param>
+        public void AssignMachineToDisplayEdge(string machineName, DisplayEdge edge, int displayIndex)
+        {
+            if (displayIndex < 0 || displayIndex >= LocalDisplays.Count)
+            {
+                return;
+            }
+
+            var layout = DisplayLayout;
+
+            // Remove any existing assignment for this machine
+            if (!string.IsNullOrEmpty(machineName))
+            {
+                layout.DevicePositions.RemoveAll(p =>
+                    string.Equals(p.MachineName, machineName, StringComparison.OrdinalIgnoreCase));
+            }
+
+            // Remove any machine currently occupying this edge+display slot
+            layout.DevicePositions.RemoveAll(p =>
+                p.Edge == edge && p.DisplayIndex == displayIndex);
+
+            // Assign the new machine (unless clearing)
+            if (!string.IsNullOrEmpty(machineName))
+            {
+                layout.DevicePositions.Add(new DisplayLayoutDevicePosition(machineName, edge, displayIndex));
+            }
+
+            SyncDisplayLayoutToMachineMatrix();
+            OnPropertyChanged(nameof(DisplayLayout));
+        }
+
+        /// <summary>
+        /// Removes all display-edge assignments for a specific machine.
+        /// </summary>
+        public void ClearMachineFromDisplayLayout(string machineName)
+        {
+            if (string.IsNullOrEmpty(machineName))
+            {
+                return;
+            }
+
+            DisplayLayout.DevicePositions.RemoveAll(p =>
+                string.Equals(p.MachineName, machineName, StringComparison.OrdinalIgnoreCase));
+
+            SyncDisplayLayoutToMachineMatrix();
+            OnPropertyChanged(nameof(DisplayLayout));
+        }
+
+        /// <summary>
+        /// Gets the machine name currently assigned to a specific edge+display, or empty string if unassigned.
+        /// </summary>
+        public string GetMachineAtEdge(DisplayEdge edge, int displayIndex)
+        {
+            var pos = DisplayLayout.DevicePositions.FirstOrDefault(p =>
+                p.Edge == edge && p.DisplayIndex == displayIndex);
+            return pos?.MachineName ?? string.Empty;
+        }
+
+        private void SyncDisplayLayoutToMachineMatrix()
+        {
+            // Save the display layout to settings
+            Settings.Properties.DisplayLayout = DisplayLayout;
+
+            // Derive flat MachineMatrixString from layout
+            string localName = System.Net.Dns.GetHostName();
+            var newMatrix = DisplayLayout.ToMachineMatrix(localName);
+
+            // Update the observable collection while preserving StatusBrush for known machines
+            var currentItems = MachineMatrixString?.ToEnumerable().ToList()
+                               ?? new List<DeviceViewModel>();
+            var brushLookup = currentItems
+                .Where(d => !string.IsNullOrEmpty(d.Name))
+                .ToDictionary(d => d.Name, d => d.StatusBrush, StringComparer.OrdinalIgnoreCase);
+
+            var newDevices = newMatrix.Select(name =>
+            {
+                var vm = new DeviceViewModel { Name = name ?? string.Empty, CanDragDrop = !IsElevated };
+                if (!string.IsNullOrEmpty(name) && brushLookup.TryGetValue(name, out var brush))
+                {
+                    vm.StatusBrush = brush;
+                }
+
+                return vm;
+            });
+
+            var newCollection = new IndexedObservableCollection<DeviceViewModel>(newDevices);
+            lock (_machineMatrixStringLock)
+            {
+                machineMatrixString = newCollection;
+            }
+
+            Settings.Properties.MachineMatrixString = newMatrix;
+            OnPropertyChanged(nameof(MachineMatrixString));
+
+            NotifyPropertyChanged(nameof(DisplayLayout));
+        }
+
         public bool ShowClipboardAndNetworkStatusMessages
         {
             get
