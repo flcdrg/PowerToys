@@ -600,9 +600,10 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
                 }
 
                 // Start by removing the machines from the matrix that are no longer available to pick.
+                // Use case-insensitive comparison because the MWB module may store names in different casing.
                 for (int i = 0; i < loadMachineMatrixString.Count; i++)
                 {
-                    if (!availableMachines.Contains(loadMachineMatrixString[i]))
+                    if (!availableMachines.Contains(loadMachineMatrixString[i], StringComparer.OrdinalIgnoreCase))
                     {
                         editedTheMatrix = true;
                         loadMachineMatrixString[i] = string.Empty;
@@ -612,7 +613,7 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
                 // If an available machine is not in the matrix already, fill it in the first available spot.
                 foreach (string availableMachineName in availableMachines)
                 {
-                    if (!loadMachineMatrixString.Contains(availableMachineName))
+                    if (!loadMachineMatrixString.Contains(availableMachineName, StringComparer.OrdinalIgnoreCase))
                     {
                         int availableIndex = loadMachineMatrixString.FindIndex(name => string.IsNullOrEmpty(name));
                         if (availableIndex >= 0)
@@ -1234,15 +1235,14 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
         }
 
         // ---- Multi-display layout support ----
-
-        private List<DisplayRect> _localDisplays;
-        private DisplayLayoutConfiguration _displayLayout;
+        private List<MouseWithoutBordersDisplayRect> _localDisplays;
+        private MouseWithoutBordersDisplayLayoutConfiguration _displayLayout;
 
         /// <summary>
         /// Gets the physical display rectangles of the current machine.
         /// Populated once on demand and cached.
         /// </summary>
-        public List<DisplayRect> LocalDisplays
+        public List<MouseWithoutBordersDisplayRect> LocalDisplays
         {
             get
             {
@@ -1255,7 +1255,7 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
                     catch (Exception ex)
                     {
                         Logger.LogError($"DisplayDetector.GetDisplays failed: {ex}");
-                        _localDisplays = new List<DisplayRect>();
+                        _localDisplays = new List<MouseWithoutBordersDisplayRect>();
                     }
                 }
 
@@ -1270,10 +1270,10 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
         public bool HasMultipleDisplays => LocalDisplays.Count > 1;
 
         /// <summary>
-        /// Gets or sets the full display-aware layout configuration.
+        /// Gets the full display-aware layout configuration.
         /// Syncs back to <see cref="MachineMatrixString"/> on every change.
         /// </summary>
-        public DisplayLayoutConfiguration DisplayLayout
+        public MouseWithoutBordersDisplayLayoutConfiguration DisplayLayout
         {
             get
             {
@@ -1284,10 +1284,10 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
 
                     if (_displayLayout == null)
                     {
-                        _displayLayout = new DisplayLayoutConfiguration
+                        _displayLayout = new MouseWithoutBordersDisplayLayoutConfiguration
                         {
                             Displays = LocalDisplays,
-                            DevicePositions = new List<DisplayLayoutDevicePosition>(),
+                            DevicePositions = new List<MouseWithoutBordersDisplayLayoutDevicePosition>(),
                         };
                     }
                     else
@@ -1305,7 +1305,7 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
         /// <summary>
         /// Returns scaled display rectangles that fit within the given canvas dimensions.
         /// </summary>
-        public (List<DisplayRect> Scaled, double Scale) GetScaledDisplays(double canvasWidth, double canvasHeight)
+        public (List<MouseWithoutBordersDisplayRect> Scaled, double Scale) GetScaledDisplays(double canvasWidth, double canvasHeight)
         {
             return DisplayDetector.ScaleToCanvas(LocalDisplays, canvasWidth, canvasHeight);
         }
@@ -1318,7 +1318,7 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
         /// <param name="machineName">The remote machine name (empty string to clear the slot).</param>
         /// <param name="edge">The display edge.</param>
         /// <param name="displayIndex">Zero-based display index.</param>
-        public void AssignMachineToDisplayEdge(string machineName, DisplayEdge edge, int displayIndex)
+        public void AssignMachineToDisplayEdge(string machineName, MouseWithoutBordersDisplayEdge edge, int displayIndex)
         {
             if (displayIndex < 0 || displayIndex >= LocalDisplays.Count)
             {
@@ -1341,7 +1341,7 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
             // Assign the new machine (unless clearing)
             if (!string.IsNullOrEmpty(machineName))
             {
-                layout.DevicePositions.Add(new DisplayLayoutDevicePosition(machineName, edge, displayIndex));
+                layout.DevicePositions.Add(new MouseWithoutBordersDisplayLayoutDevicePosition(machineName, edge, displayIndex));
             }
 
             SyncDisplayLayoutToMachineMatrix();
@@ -1368,11 +1368,50 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
         /// <summary>
         /// Gets the machine name currently assigned to a specific edge+display, or empty string if unassigned.
         /// </summary>
-        public string GetMachineAtEdge(DisplayEdge edge, int displayIndex)
+        public string GetMachineAtEdge(MouseWithoutBordersDisplayEdge edge, int displayIndex)
         {
             var pos = DisplayLayout.DevicePositions.FirstOrDefault(p =>
                 p.Edge == edge && p.DisplayIndex == displayIndex);
             return pos?.MachineName ?? string.Empty;
+        }
+
+        /// <summary>
+        /// Finds the local machine name with the casing used in the current matrix or pool,
+        /// falling back to <see cref="Dns.GetHostName()"/>.
+        /// The MWB module may uppercase machine names during connection setup, so we must
+        /// preserve that casing to avoid mismatches with the pool.
+        /// </summary>
+        private string FindLocalMachineName()
+        {
+            string dnsName = Dns.GetHostName();
+
+            // Check the current matrix for a matching name (preserves pool casing)
+            var existing = MachineMatrixString?.ToEnumerable()
+                .Select(d => d.Name)
+                .FirstOrDefault(n => !string.IsNullOrEmpty(n) &&
+                    string.Equals(n, dnsName, StringComparison.OrdinalIgnoreCase));
+
+            if (!string.IsNullOrEmpty(existing))
+            {
+                return existing;
+            }
+
+            // Check the pool for a matching name
+            string pool = Settings.Properties.MachinePool?.Value;
+            if (!string.IsNullOrEmpty(pool))
+            {
+                foreach (string pair in pool.Split(','))
+                {
+                    string name = pair.Split(':')[0];
+                    if (!string.IsNullOrEmpty(name) &&
+                        string.Equals(name, dnsName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return name;
+                    }
+                }
+            }
+
+            return dnsName;
         }
 
         private void SyncDisplayLayoutToMachineMatrix()
@@ -1380,8 +1419,11 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
             // Save the display layout to settings
             Settings.Properties.DisplayLayout = DisplayLayout;
 
-            // Derive flat MachineMatrixString from layout
-            string localName = System.Net.Dns.GetHostName();
+            // Derive flat MachineMatrixString from layout.
+            // Use the local machine name from the current matrix (which preserves the casing
+            // from the MWB module's pool) rather than Dns.GetHostName(), because the MWB module
+            // may uppercase machine names during connection setup.
+            string localName = FindLocalMachineName();
             var newMatrix = DisplayLayout.ToMachineMatrix(localName);
 
             // Update the observable collection while preserving StatusBrush for known machines

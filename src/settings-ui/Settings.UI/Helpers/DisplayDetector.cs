@@ -22,6 +22,7 @@ namespace Microsoft.PowerToys.Settings.UI.Helpers
 
         private delegate bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdcMonitor, ref RECT lprcMonitor, IntPtr dwData);
 
+#pragma warning disable SA1307 // Win32 API
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
         private struct MONITORINFOEX
         {
@@ -42,21 +43,24 @@ namespace Microsoft.PowerToys.Settings.UI.Helpers
             public int Right;
             public int Bottom;
         }
+#pragma warning restore SA1307
 
+#pragma warning disable SA1310 // Field names should not contain underscore
         private const uint MONITORINFOF_PRIMARY = 0x00000001;
+#pragma warning restore SA1310 // Field names should not contain underscore
 
         /// <summary>
         /// Enumerates all displays on the current machine and returns their bounding rectangles.
         /// The primary display is placed first in the list.
         /// </summary>
         /// <returns>List of display rectangles, primary display first.</returns>
-        public static List<DisplayRect> GetDisplays()
+        public static List<MouseWithoutBordersDisplayRect> GetDisplays()
         {
-            var primaryDisplays = new List<DisplayRect>();
-            var otherDisplays = new List<DisplayRect>();
+            var primaryDisplays = new List<MouseWithoutBordersDisplayRect>();
+            var otherDisplays = new List<MouseWithoutBordersDisplayRect>();
             List<string> errors = null;
 
-            MonitorEnumProc callback = (hMonitor, hdcMonitor, ref lprcMonitor, dwData) =>
+            MonitorEnumProc callback = (IntPtr hMonitor, IntPtr hdcMonitor, ref RECT lprcMonitor, IntPtr dwData) =>
             {
                 try
                 {
@@ -65,7 +69,7 @@ namespace Microsoft.PowerToys.Settings.UI.Helpers
 
                     if (GetMonitorInfo(hMonitor, ref mi))
                     {
-                        var rect = new DisplayRect(
+                        var rect = new MouseWithoutBordersDisplayRect(
                             mi.rcMonitor.Left,
                             mi.rcMonitor.Top,
                             mi.rcMonitor.Right,
@@ -99,7 +103,7 @@ namespace Microsoft.PowerToys.Settings.UI.Helpers
                 return cmp != 0 ? cmp : a.Top.CompareTo(b.Top);
             });
 
-            var result = new List<DisplayRect>(primaryDisplays.Count + otherDisplays.Count);
+            var result = new List<MouseWithoutBordersDisplayRect>(primaryDisplays.Count + otherDisplays.Count);
             result.AddRange(primaryDisplays);
             result.AddRange(otherDisplays);
             return result;
@@ -111,7 +115,7 @@ namespace Microsoft.PowerToys.Settings.UI.Helpers
         public static bool HasMultipleDisplays()
         {
             int count = 0;
-            MonitorEnumProc callback = (hMonitor, hdcMonitor, ref lprcMonitor, dwData) =>
+            MonitorEnumProc callback = (IntPtr hMonitor, IntPtr hdcMonitor, ref RECT lprcMonitor, IntPtr dwData) =>
             {
                 count++;
                 return count < 2; // stop early once we know there are at least 2
@@ -130,15 +134,15 @@ namespace Microsoft.PowerToys.Settings.UI.Helpers
         /// <param name="canvasHeight">Target canvas height in pixels.</param>
         /// <param name="padding">Padding to leave around the whole arrangement.</param>
         /// <returns>Scaled rectangles and the scale factor used.</returns>
-        public static (List<DisplayRect> ScaledDisplays, double Scale) ScaleToCanvas(
-            IList<DisplayRect> displays,
+        public static (List<MouseWithoutBordersDisplayRect> ScaledDisplays, double Scale) ScaleToCanvas(
+            IList<MouseWithoutBordersDisplayRect> displays,
             double canvasWidth,
             double canvasHeight,
             double padding = 8.0)
         {
             if (displays == null || displays.Count == 0)
             {
-                return (new List<DisplayRect>(), 1.0);
+                return (new List<MouseWithoutBordersDisplayRect>(), 1.0);
             }
 
             // Compute bounding box of all displays in physical coordinates
@@ -173,7 +177,7 @@ namespace Microsoft.PowerToys.Settings.UI.Helpers
 
             if (physWidth <= 0 || physHeight <= 0)
             {
-                return (new List<DisplayRect>(), 1.0);
+                return (new List<MouseWithoutBordersDisplayRect>(), 1.0);
             }
 
             double availableWidth = canvasWidth - (padding * 2);
@@ -186,17 +190,17 @@ namespace Microsoft.PowerToys.Settings.UI.Helpers
             // Compute offset to center the arrangement in the canvas
             double scaledTotalWidth = physWidth * scale;
             double scaledTotalHeight = physHeight * scale;
-            double offsetX = padding + (availableWidth - scaledTotalWidth) / 2.0;
-            double offsetY = padding + (availableHeight - scaledTotalHeight) / 2.0;
+            double offsetX = padding + ((availableWidth - scaledTotalWidth) / 2.0);
+            double offsetY = padding + ((availableHeight - scaledTotalHeight) / 2.0);
 
-            var scaled = new List<DisplayRect>(displays.Count);
+            var scaled = new List<MouseWithoutBordersDisplayRect>(displays.Count);
             foreach (var d in displays)
             {
                 int left = (int)Math.Round(offsetX + ((d.Left - physLeft) * scale));
                 int top = (int)Math.Round(offsetY + ((d.Top - physTop) * scale));
                 int right = (int)Math.Round(offsetX + ((d.Right - physLeft) * scale));
                 int bottom = (int)Math.Round(offsetY + ((d.Bottom - physTop) * scale));
-                scaled.Add(new DisplayRect(left, top, right, bottom));
+                scaled.Add(new MouseWithoutBordersDisplayRect(left, top, right, bottom));
             }
 
             return (scaled, scale);

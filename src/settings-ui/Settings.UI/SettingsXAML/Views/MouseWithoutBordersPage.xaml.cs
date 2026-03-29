@@ -129,6 +129,12 @@ namespace Microsoft.PowerToys.Settings.UI.Views
             var targetDeviceIndex = GetDeviceIndex((Border)e.OriginalSource);
 
             ViewModel.MachineMatrixString.Swap(draggedDeviceIndex, targetDeviceIndex);
+
+            // Reassign the collection to trigger the property setter, which saves settings to disk.
+            // Simply swapping items within the collection doesn't trigger the setter because the
+            // collection reference remains the same.
+            ViewModel.MachineMatrixString = ViewModel.MachineMatrixString;
+
             var itemsControl = (ItemsControl)FindName("DevicesItemsControl");
             var binding = itemsControl.GetBindingExpression(ItemsControl.ItemsSourceProperty);
             binding.UpdateSource();

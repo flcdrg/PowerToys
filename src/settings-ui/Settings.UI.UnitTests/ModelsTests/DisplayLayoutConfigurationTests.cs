@@ -15,7 +15,6 @@ namespace CommonLibTest
     public class DisplayLayoutConfigurationTests
     {
         // ---- DisplayRect ----
-
         [TestMethod]
         public void DisplayRect_WidthAndHeight_ComputedCorrectly()
         {
@@ -58,7 +57,6 @@ namespace CommonLibTest
         }
 
         // ---- DisplayLayoutConfiguration.ToMachineMatrix ----
-
         [TestMethod]
         public void ToMachineMatrix_Empty_ReturnsFourEmptySlots()
         {
@@ -161,6 +159,7 @@ namespace CommonLibTest
 
             var matrix = cfg.ToMachineMatrix("LOCAL");
             Assert.AreEqual(4, matrix.Count);
+
             // First 4 of [A, LOCAL, B, C] — all fit
             Assert.IsTrue(matrix.Contains("A"));
             Assert.IsTrue(matrix.Contains("LOCAL"));
@@ -198,7 +197,6 @@ namespace CommonLibTest
         }
 
         // ---- Sanitize ----
-
         [TestMethod]
         public void Sanitize_RemovesOutOfRangeDisplayIndex()
         {
@@ -258,7 +256,6 @@ namespace CommonLibTest
         }
 
         // ---- FindFirstAvailableEdge ----
-
         [TestMethod]
         public void FindFirstAvailableEdge_EmptyConfig_ReturnsRightEdgeOfLastDisplay()
         {
@@ -300,7 +297,6 @@ namespace CommonLibTest
         }
 
         // ---- Full serialization roundtrip ----
-
         [TestMethod]
         public void DisplayLayoutConfiguration_FullSerializationRoundtrip()
         {
@@ -331,7 +327,6 @@ namespace CommonLibTest
         }
 
         // ---- MouseWithoutBordersProperties integration ----
-
         [TestMethod]
         public void MouseWithoutBordersProperties_DisplayLayout_NullByDefault()
         {

@@ -216,7 +216,23 @@ namespace Microsoft.PowerToys.Settings.UI.Library
                         _settingsPath.CreateSettingsFolder(powertoy);
                     }
 
-                    _file.WriteAllText(_settingsPath.GetSettingsPath(powertoy, fileName), jsonSettings);
+                    var settingsFilePath = _settingsPath.GetSettingsPath(powertoy, fileName);
+
+                    // Retry on IOException to handle file contention between the Settings UI
+                    // and module processes that watch and write the same settings file.
+                    const int maxAttempts = 3;
+                    for (int attempt = 1; attempt <= maxAttempts; attempt++)
+                    {
+                        try
+                        {
+                            _file.WriteAllText(settingsFilePath, jsonSettings);
+                            return;
+                        }
+                        catch (IOException) when (attempt < maxAttempts)
+                        {
+                            System.Threading.Thread.Sleep(100);
+                        }
+                    }
                 }
             }
             catch (Exception e)

@@ -32,7 +32,7 @@ namespace Microsoft.PowerToys.Settings.UI.Controls
         // Tag attached to each edge drop-zone border so we can identify it on drop
         private sealed class EdgeTag
         {
-            public DisplayEdge Edge { get; init; }
+            public MouseWithoutBordersDisplayEdge Edge { get; init; }
 
             public int DisplayIndex { get; init; }
         }
@@ -132,39 +132,39 @@ namespace Microsoft.PowerToys.Settings.UI.Controls
                 LayoutCanvas.Children.Add(labelContainer);
 
                 // Edge drop zones
-                AddEdgeDropZone(sr, i, DisplayEdge.Left, vm);
-                AddEdgeDropZone(sr, i, DisplayEdge.Right, vm);
-                AddEdgeDropZone(sr, i, DisplayEdge.Top, vm);
-                AddEdgeDropZone(sr, i, DisplayEdge.Bottom, vm);
+                AddEdgeDropZone(sr, i, MouseWithoutBordersDisplayEdge.Left, vm);
+                AddEdgeDropZone(sr, i, MouseWithoutBordersDisplayEdge.Right, vm);
+                AddEdgeDropZone(sr, i, MouseWithoutBordersDisplayEdge.Top, vm);
+                AddEdgeDropZone(sr, i, MouseWithoutBordersDisplayEdge.Bottom, vm);
             }
         }
 
-        private void AddEdgeDropZone(DisplayRect sr, int displayIndex, DisplayEdge edge, MouseWithoutBordersViewModel vm)
+        private void AddEdgeDropZone(MouseWithoutBordersDisplayRect sr, int displayIndex, MouseWithoutBordersDisplayEdge edge, MouseWithoutBordersViewModel vm)
         {
             double thickness = EdgeDropZoneThickness;
             double left, top, width, height;
 
             switch (edge)
             {
-                case DisplayEdge.Left:
+                case MouseWithoutBordersDisplayEdge.Left:
                     left = sr.Left - thickness;
                     top = sr.Top;
                     width = thickness;
                     height = sr.Height;
                     break;
-                case DisplayEdge.Right:
+                case MouseWithoutBordersDisplayEdge.Right:
                     left = sr.Right;
                     top = sr.Top;
                     width = thickness;
                     height = sr.Height;
                     break;
-                case DisplayEdge.Top:
+                case MouseWithoutBordersDisplayEdge.Top:
                     left = sr.Left;
                     top = sr.Top - thickness;
                     width = sr.Width;
                     height = thickness;
                     break;
-                case DisplayEdge.Bottom:
+                case MouseWithoutBordersDisplayEdge.Bottom:
                     left = sr.Left;
                     top = sr.Bottom;
                     width = sr.Width;
@@ -244,7 +244,6 @@ namespace Microsoft.PowerToys.Settings.UI.Controls
         }
 
         // ---- Drag and Drop ----
-
         private const string DragDropFormatMachineName = "MWB.DisplayPanel.MachineName";
 
         private void Canvas_DragOver(object sender, DragEventArgs e)
