@@ -138,7 +138,7 @@
                                             DragOver="Device_DragOver"
                                             DragStarting="Device_DragStarting"
                                             Drop="Device_Drop"
-                                            ToolTipService.ToolTip="{Binding Item.Name, Mode=OneWay}">
+                                            ToolTipService.ToolTip="{Binding Item.ToolTipText, Mode=OneWay}">
                                             <Grid>
                                                 <Grid.RowDefinitions>
                                                     <RowDefinition Height="*" />

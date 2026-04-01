@@ -59,6 +59,47 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
             { SocketStatus.Connected, new SolidColorBrush(Colors.Green) },
         };
 
+        private static readonly Dictionary<SocketStatus, string> StatusText = new Dictionary<SocketStatus, string>()
+        {
+            { SocketStatus.NA, "Not available" },
+            { SocketStatus.Resolving, "Resolving" },
+            { SocketStatus.Connecting, "Connecting" },
+            { SocketStatus.Handshaking, "Handshaking" },
+            { SocketStatus.Error, "Error" },
+            { SocketStatus.ForceClosed, "Force closed" },
+            { SocketStatus.InvalidKey, "Invalid key" },
+            { SocketStatus.Timeout, "Timeout" },
+            { SocketStatus.SendError, "Send error" },
+            { SocketStatus.Connected, "Connected" },
+        };
+
+        private static string GetConnectionStatusText(SocketStatus status)
+        {
+            if (StatusText.TryGetValue(status, out var text))
+            {
+                return text;
+            }
+
+            return StatusText[SocketStatus.NA];
+        }
+
+        private static bool IsCurrentMachine(string machineName)
+        {
+            if (string.IsNullOrWhiteSpace(machineName))
+            {
+                return false;
+            }
+
+            try
+            {
+                return string.Equals(machineName, Dns.GetHostName(), StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         private bool _connectFieldsVisible;
 
         public bool IsElevated { get => GeneralSettingsConfig.IsElevated; }
@@ -235,7 +276,7 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
             get => _enabledStateIsGPOConfigured;
         }
 
-        private enum SocketStatus : int
+        internal enum SocketStatus : int
         {
             NA = 0,
             Resolving = 1,
@@ -488,6 +529,7 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
                                             try
                                             {
                                                 machine.Item.StatusBrush = StatusColors[state.Status];
+                                                machine.Item.UpdateConnectionStatus(state.Status);
                                             }
                                             catch (Exception)
                                             {
@@ -1192,6 +1234,7 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
             public bool CanDragDrop { get; set; }
 
             private Brush _statusBrush = StatusColors[SocketStatus.NA];
+            private SocketStatus _connectionStatus = SocketStatus.NA;
 
             public Brush StatusBrush
             {
@@ -1209,6 +1252,19 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
                     }
                 }
             }
+
+            private SocketStatus ConnectionStatus => _connectionStatus;
+
+            internal void UpdateConnectionStatus(SocketStatus status)
+            {
+                if (_connectionStatus != status)
+                {
+                    _connectionStatus = status;
+                    OnPropertyChanged(nameof(ToolTipText));
+                }
+            }
+
+            public string ToolTipText => IsCurrentMachine(Name) ? "This computer" : $"{Name}: {GetConnectionStatusText(ConnectionStatus)}";
         }
 
         public IndexedObservableCollection<DeviceViewModel> MachineMatrixString
