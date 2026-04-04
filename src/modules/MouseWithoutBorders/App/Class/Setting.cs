@@ -132,6 +132,14 @@ namespace MouseWithoutBorders.Class
                         {
                             SaveSettings();
                         }
+
+                        if (last_properties.UseMonitorLayout != _settings.Properties.UseMonitorLayout
+                            || last_properties.MonitorLayout?.Count != _settings.Properties.MonitorLayout?.Count
+                            || (_settings.Properties.UseMonitorLayout && _settings.Properties.MonitorLayout != null
+                                && !MonitorLayoutsEquivalent(last_properties.MonitorLayout, _settings.Properties.MonitorLayout)))
+                        {
+                            MachineStuff.RebuildMonitorLayout();
+                        }
                     }
                 }
             }
@@ -141,6 +149,41 @@ namespace MouseWithoutBorders.Class
             }
 
             PauseInstantSaving = false;
+        }
+
+        /// <summary>
+        /// Returns <see langword="true"/> when two monitor layout lists have the same monitors
+        /// at the same positions, so that a file-watcher reload can skip rebuilding adjacency
+        /// when nothing meaningful changed.
+        /// </summary>
+        private static bool MonitorLayoutsEquivalent(
+            List<MonitorLayoutInfo> a,
+            List<MonitorLayoutInfo> b)
+        {
+            if (a == null && b == null)
+            {
+                return true;
+            }
+
+            if (a == null || b == null || a.Count != b.Count)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < a.Count; i++)
+            {
+                var ai = a[i];
+                var bi = b[i];
+                if (!string.Equals(ai.MachineName, bi.MachineName, StringComparison.OrdinalIgnoreCase)
+                    || !string.Equals(ai.MonitorId, bi.MonitorId, StringComparison.Ordinal)
+                    || ai.X != bi.X || ai.Y != bi.Y
+                    || ai.Width != bi.Width || ai.Height != bi.Height)
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         public void SaveSettings()
@@ -1180,10 +1223,65 @@ namespace MouseWithoutBorders.Class
                 return false;
             }
         }
+
+        internal bool UseMonitorLayout
+        {
+            get
+            {
+                lock (_loadingSettingsLock)
+                {
+                    return _properties.UseMonitorLayout;
+                }
+            }
+
+            set
+            {
+                lock (_loadingSettingsLock)
+                {
+                    _properties.UseMonitorLayout = value;
+                    if (!PauseInstantSaving)
+                    {
+                        SaveSettings();
+                    }
+                }
+            }
+        }
+
+        internal List<MonitorLayoutInfo> MonitorLayout
+        {
+            get
+            {
+                lock (_loadingSettingsLock)
+                {
+                    return _properties.MonitorLayout;
+                }
+            }
+
+            set
+            {
+                lock (_loadingSettingsLock)
+                {
+                    _properties.MonitorLayout = value;
+                    if (!PauseInstantSaving)
+                    {
+                        SaveSettings();
+                    }
+                }
+            }
+        }
     }
 
     public static class Setting
     {
         internal static Settings Values = new Settings();
+
+        /// <summary>
+        /// Gets a value indicating whether the per-monitor layout feature is active.
+        /// Returns <see langword="false"/> when <see cref="Settings.UseMonitorLayout"/> is
+        /// <see langword="false"/> or when <see cref="Settings.MonitorLayout"/> is null/empty,
+        /// signalling that the legacy machine-matrix mode should be used instead.
+        /// </summary>
+        internal static bool IsMonitorLayoutEnabled =>
+            Values.UseMonitorLayout && Values.MonitorLayout is { Count: > 0 };
     }
 }

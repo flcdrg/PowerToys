@@ -18,8 +18,8 @@ namespace MouseWithoutBorders
         private void DoneButtonClick(object sender, EventArgs e)
         {
             // SendNextPage(new SettingsPage1());
-            MachineStuff.CloseSetupForm();
-            MachineStuff.ShowMachineMatrix();
+            SetupFormManager.CloseSetupForm();
+            SetupFormManager.ShowMachineMatrix();
         }
     }
 }

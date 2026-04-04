@@ -1,4 +1,4 @@
-﻿// Copyright (c) Microsoft Corporation
+// Copyright (c) Microsoft Corporation
 // The Microsoft Corporation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
@@ -28,6 +28,7 @@ using System.Windows.Forms;
 using System.Xml.Linq;
 
 using ManagedCommon;
+using Microsoft.PowerToys.Settings.UI.Library;
 using Microsoft.PowerToys.Settings.UI.Library.Utilities;
 using Microsoft.PowerToys.Telemetry;
 using MouseWithoutBorders.Core;
@@ -136,7 +137,7 @@ namespace MouseWithoutBorders.Class
 
                 if (firstArg != string.Empty)
                 {
-                    if (MachineStuff.CheckSecondInstance(Common.RunWithNoAdminRight))
+                    if (ProcessInstanceGuard.CheckSecondInstance(Common.RunWithNoAdminRight))
                     {
                         Logger.Log("*** Second instance, exiting...");
                         return;
@@ -166,7 +167,7 @@ namespace MouseWithoutBorders.Class
                 }
                 else
                 {
-                    if (MachineStuff.CheckSecondInstance(true))
+                    if (ProcessInstanceGuard.CheckSecondInstance(true))
                     {
                         Logger.Log("*** Second instance, exiting...");
                         return;
@@ -274,6 +275,14 @@ namespace MouseWithoutBorders.Class
             void ConnectToMachine(string machineName, string securityKey);
 
             Task<MachineSocketState[]> RequestMachineSocketStateAsync();
+
+            Task<bool> GetUseMonitorLayoutAsync();
+
+            void SetUseMonitorLayout(bool value);
+
+            Task<List<MonitorLayoutInfo>> GetMonitorLayoutAsync();
+
+            void SetMonitorLayout(List<MonitorLayoutInfo> monitors);
         }
 
         private sealed class SettingsSyncHelper : ISettingsSyncHelper
@@ -371,6 +380,29 @@ namespace MouseWithoutBorders.Class
                 }
 
                 Common.MainForm.Quit(true, false);
+            }
+
+            public Task<bool> GetUseMonitorLayoutAsync()
+            {
+                return Task.FromResult(Setting.Values.UseMonitorLayout);
+            }
+
+            public void SetUseMonitorLayout(bool value)
+            {
+                Setting.Values.UseMonitorLayout = value;
+                MachineStuff.RebuildMonitorLayout();
+            }
+
+            public Task<List<MonitorLayoutInfo>> GetMonitorLayoutAsync()
+            {
+                return Task.FromResult(Setting.Values.MonitorLayout ?? new List<MonitorLayoutInfo>());
+            }
+
+            public void SetMonitorLayout(List<MonitorLayoutInfo> monitors)
+            {
+                Setting.Values.MonitorLayout = monitors;
+                MachineStuff.RebuildMonitorLayout();
+                Common.Sk?.PushLayoutToAllConnectedPeers();
             }
         }
 

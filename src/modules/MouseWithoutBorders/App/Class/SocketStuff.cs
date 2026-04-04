@@ -14,9 +14,12 @@ using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using Microsoft.PowerToys.Settings.UI.Library;
 using MouseWithoutBorders.Core;
 
 // <summary>
@@ -151,6 +154,7 @@ namespace MouseWithoutBorders.Class
         private readonly int bASE_PORT;
         private TcpServer skClipboardServer;
         private TcpServer skMessageServer;
+        private TcpServer skMonitorServer;
         internal object TcpSocketsLock = new();
         internal static bool InvalidKeyFound;
         internal static bool InvalidKeyFoundOnClientSocket;
@@ -378,6 +382,10 @@ namespace MouseWithoutBorders.Class
                         Logger.LogDebug($"Closing socket [{skClipboardServer?.Name}].");
                         skClipboardServer?.Close();
                         skClipboardServer = null;
+
+                        Logger.LogDebug($"Closing socket [{skMonitorServer?.Name}].");
+                        skMonitorServer?.Close();
+                        skMonitorServer = null;
                         try
                         {
                             // If these sockets are failed to be closed then the tool would not function properly, more logs are added for debugging.
@@ -478,6 +486,7 @@ namespace MouseWithoutBorders.Class
             {
                 skMessageServer = new TcpServer(TcpPort + 1, new ParameterizedThreadStart(TCPServerThread));
                 skClipboardServer = new TcpServer(TcpPort, new ParameterizedThreadStart(AcceptConnectionAndSendClipboardData));
+                skMonitorServer = new TcpServer(TcpPort + 2, new ParameterizedThreadStart(MonitorMetadataServerThread));
             }
             catch (SocketException e)
             {
@@ -1138,8 +1147,21 @@ namespace MouseWithoutBorders.Class
 
                 try
                 {
-                    tcpClient = new TcpClient(AddressFamily.InterNetworkV6);
-                    tcpClient.Client.DualMode = true;
+                    // Use a plain IPv4 socket for IPv4 addresses so that Windows
+                    // Firewall sees a normal IPv4 connection rather than an
+                    // IPv4-mapped IPv6 packet (::ffff:x.x.x.x).  Firewall rules
+                    // added by MWB cover TCP/15101 for IPv4; using a DualMode
+                    // IPv6 socket for an IPv4 destination would hit a separate
+                    // (missing) IPv6 rule and time out silently.
+                    if (ip.AddressFamily == AddressFamily.InterNetworkV6)
+                    {
+                        tcpClient = new TcpClient(AddressFamily.InterNetworkV6);
+                        tcpClient.Client.DualMode = true;
+                    }
+                    else
+                    {
+                        tcpClient = new TcpClient(AddressFamily.InterNetwork);
+                    }
 
                     if (Common.IsConnectedByAClientSocketTo(machineName))
                     {
@@ -1478,6 +1500,17 @@ namespace MouseWithoutBorders.Class
                                     {
                                         MachineStuff.UpdateClientSockets("MainTCPRoutine");
                                     }
+
+                                    // Push local monitor metadata to the peer in the background.
+                                    // This is an optional, non-breaking side-channel exchange on TcpPort + 2.
+                                    // If the peer does not support it or the exchange fails, we log and continue.
+                                    IPAddress monitorPeerAddress = ((IPEndPoint)currentSocket.RemoteEndPoint).Address;
+                                    string monitorPeerMachine = remoteMachine;
+                                    _ = Task.Factory.StartNew(
+                                        () => PushMonitorMetadataToPeer(monitorPeerAddress, monitorPeerMachine),
+                                        CancellationToken.None,
+                                        TaskCreationOptions.None,
+                                        TaskScheduler.Default);
                                 }
                                 else
                                 {
@@ -2124,6 +2157,240 @@ namespace MouseWithoutBorders.Class
                 {
                     Common.MainForm.Quit(true, false);
                 }
+            }
+        }
+
+        // Monitor metadata side-channel methods (TcpPort + 2).
+        // These are optional and non-breaking: failure is logged at Info level and execution continues.
+
+        /// <summary>
+        /// Accepts incoming monitor metadata pushes from peers on TcpPort + 2.
+        /// Each connecting peer sends its local monitor list as a JSON line; we deserialize and store it.
+        /// </summary>
+        private static void MonitorMetadataServerThread(object param)
+        {
+            // SuppressFlow fixes an issue on service mode, where the helper process can't get enough permissions to be started again.
+            // More details can be found on: https://github.com/microsoft/PowerToys/pull/36892
+            using var asyncFlowControl = ExecutionContext.SuppressFlow();
+
+            TcpListener server = param as TcpListener;
+
+            try
+            {
+                do
+                {
+                    Logger.LogDebug("MonitorMetadataServerThread: Waiting for request...");
+                    Socket s = null;
+
+                    try
+                    {
+                        s = server.AcceptSocket();
+                    }
+                    catch (InvalidOperationException e)
+                    {
+                        Logger.Log($"MonitorMetadataServerThread: The monitor metadata socket could have been closed. {e.Message}");
+                        break;
+                    }
+                    catch (SocketException e)
+                    {
+                        if (e.ErrorCode == (int)SocketError.Interrupted)
+                        {
+                            Logger.Log("MonitorMetadataServerThread.AcceptSocket: A blocking socket call was canceled.");
+                            break;
+                        }
+
+                        Logger.Log(e);
+                        break;
+                    }
+
+                    if (s != null)
+                    {
+                        try
+                        {
+                            new Task(() =>
+                            {
+                                using var taskFlowControl = ExecutionContext.SuppressFlow();
+                                ReceiveMonitorMetadata(s);
+                            }).Start();
+                        }
+                        catch (Exception e)
+                        {
+                            Logger.Log(e);
+                        }
+                    }
+                }
+                while (true);
+            }
+            catch (Exception e)
+            {
+                Logger.Log(e);
+            }
+        }
+
+        /// <summary>
+        /// Reads a JSON monitor list from the peer socket, deserializes it, and stores it in MachinePool.
+        /// </summary>
+        private static void ReceiveMonitorMetadata(Socket s)
+        {
+            s.ReceiveTimeout = 5000;
+
+            try
+            {
+                using (NetworkStream stream = new NetworkStream(s, ownsSocket: true))
+                {
+                    // Read bytes until newline terminator (maximum 64 KB to guard against runaway senders).
+                    const int MaxJsonBytes = 65536;
+                    List<byte> buffer = new List<byte>(4096);
+                    int b;
+                    while (buffer.Count < MaxJsonBytes && (b = stream.ReadByte()) != -1 && b != '\n')
+                    {
+                        buffer.Add((byte)b);
+                    }
+
+                    string json = Encoding.UTF8.GetString(buffer.ToArray());
+                    if (string.IsNullOrEmpty(json))
+                    {
+                        Logger.Log("MonitorMetadata: Received empty payload from peer — using legacy fallback.");
+                        return;
+                    }
+
+                    List<MonitorLayoutInfo> monitors = JsonSerializer.Deserialize<List<MonitorLayoutInfo>>(json);
+                    if (monitors == null || monitors.Count == 0)
+                    {
+                        Logger.Log("MonitorMetadata: Received null or empty monitor list from peer — using legacy fallback.");
+                        return;
+                    }
+
+                    string machineName = monitors[0].MachineName;
+                    if (string.IsNullOrEmpty(machineName))
+                    {
+                        Logger.Log("MonitorMetadata: Received monitor data with no machine name — using legacy fallback.");
+                        return;
+                    }
+
+                    // If the layout spans more than one machine it is a full multi-machine layout
+                    // pushed by the controlling machine.  Apply it directly so this machine knows
+                    // the complete topology and can navigate in both directions.
+                    bool isFullLayout = monitors.Any(m =>
+                        !m.MachineName.Equals(machineName, StringComparison.OrdinalIgnoreCase));
+
+                    if (isFullLayout)
+                    {
+                        // Rebuild adjacency immediately from the received layout so switching
+                        // starts using the updated topology before the Settings UI reloads.
+                        MachineStuff.RebuildMonitorLayoutFromList(monitors);
+
+                        // Persist the authoritative shared canvas so every connected machine shows
+                        // the same placement in Settings UI.
+                        MachineStuff.UpdateRemoteMachineLayoutsInSettings(monitors);
+                        Logger.Log($"MonitorMetadata: Applied full multi-machine layout ({monitors.Count} monitors).");
+                    }
+                    else
+                    {
+                        MachineStuff.MachinePool.UpdateMonitorMetadata(machineName, monitors);
+                        Logger.Log($"MonitorMetadata: Received monitor metadata from {machineName} ({monitors.Count} monitor(s)).");
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                Logger.Log($"MonitorMetadata: Peer did not respond or parse error — using legacy fallback. {e.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Pushes the current full monitor layout to all connected client peers on
+        /// TcpPort + 2.  Called after the user clicks "Apply Layout" so that remote
+        /// machines immediately receive the updated topology without reconnecting.
+        /// </summary>
+        internal void PushLayoutToAllConnectedPeers()
+        {
+            List<(IPAddress Addr, string Name)> targets;
+            lock (TcpSocketsLock)
+            {
+                targets = TcpSockets?
+                    .Where(t => t.IsClient && t.Status == SocketStatus.Connected && t.Address != null)
+                    .Select(t => (t.Address, t.MachineName))
+                    .ToList() ?? new List<(IPAddress, string)>();
+            }
+
+            if (targets.Count == 0)
+            {
+                Logger.Log("MonitorMetadata: PushLayoutToAllConnectedPeers — no connected peers.");
+                return;
+            }
+
+            Logger.Log($"MonitorMetadata: Pushing updated layout to {targets.Count} peer(s).");
+            foreach (var (addr, name) in targets)
+            {
+                var capturedAddr = addr;
+                var capturedName = name;
+                _ = Task.Factory.StartNew(
+                    () => PushMonitorMetadataToPeer(capturedAddr, capturedName),
+                    CancellationToken.None,
+                    TaskCreationOptions.None,
+                    TaskScheduler.Default);
+            }
+        }
+
+        /// <summary>
+        /// Connects to peerIp:TcpPort+2 and pushes the local machine's monitor layout as a JSON line.
+        /// Failures are logged and swallowed — this exchange must never disrupt the main TCP connection.
+        /// </summary>
+        private void PushMonitorMetadataToPeer(IPAddress peerIp, string peerMachineName)
+        {
+            Logger.Log($"MonitorMetadata: Initiating monitor metadata exchange with {peerMachineName}.");
+
+            try
+            {
+                // Use the correct address family to avoid IPv4-mapped IPv6 firewall issues.
+                using TcpClient tcpClient = peerIp.AddressFamily == AddressFamily.InterNetworkV6
+                    ? new TcpClient(AddressFamily.InterNetworkV6) { Client = { DualMode = true } }
+                    : new TcpClient(AddressFamily.InterNetwork);
+
+                tcpClient.Connect(peerIp, TcpPort + 2);
+
+                // If UseMonitorLayout is active and our stored layout covers multiple machines,
+                // push the full layout so the peer can navigate correctly in both directions.
+                // Otherwise push only our local physical monitors (legacy behaviour).
+                // Patch local monitors to physical coordinates before sending so that
+                // the peer receives accurate dimensions (e.g. physical 3840×2160 instead
+                // of DPI-scaled 1920×1080).
+                List<MonitorLayoutInfo> fullLayout = Setting.Values.UseMonitorLayout
+                    ? Setting.Values.MonitorLayout
+                    : null;
+
+                if (fullLayout?.Count > 0)
+                {
+                    fullLayout = MonitorLayoutPatcher.Patch(
+                        fullLayout,
+                        Common.MachineName,
+                        WinAPI.PhysicalMonitors,
+                        MachineStuff.desktopBounds);
+                }
+
+                List<MonitorLayoutInfo> layoutToSend;
+                if (fullLayout?.Count > 0 &&
+                    fullLayout.Any(m => !m.MachineName.Equals(Common.MachineName, StringComparison.OrdinalIgnoreCase)))
+                {
+                    layoutToSend = fullLayout;
+                    Logger.Log($"MonitorMetadata: Pushing full layout ({layoutToSend.Count} monitors) to {peerMachineName}.");
+                }
+                else
+                {
+                    layoutToSend = Common.GetLocalMonitors(Common.MachineName);
+                }
+
+                string json = JsonSerializer.Serialize(layoutToSend);
+                byte[] payload = Encoding.UTF8.GetBytes(json + "\n");
+
+                using NetworkStream stream = tcpClient.GetStream();
+                stream.Write(payload, 0, payload.Length);
+                stream.Flush();
+            }
+            catch (Exception e)
+            {
+                Logger.Log($"MonitorMetadata: Peer {peerMachineName} did not respond / exchange failed — using legacy fallback. {e.Message}");
             }
         }
     }

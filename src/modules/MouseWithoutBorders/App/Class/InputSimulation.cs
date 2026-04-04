@@ -235,20 +235,20 @@ namespace MouseWithoutBorders.Class
         internal static void MoveMouseEx(int x, int y)
         {
             NativeMethods.INPUT mouse_input = default;
-
-            long w65535 = (MachineStuff.DesktopBounds.Right - MachineStuff.DesktopBounds.Left) * 65535 / Common.ScreenWidth;
-            long h65535 = (MachineStuff.DesktopBounds.Bottom - MachineStuff.DesktopBounds.Top) * 65535 / Common.ScreenHeight;
-            long l65535 = MachineStuff.DesktopBounds.Left * 65535 / Common.ScreenWidth;
-            long t65535 = MachineStuff.DesktopBounds.Top * 65535 / Common.ScreenHeight;
             mouse_input.type = 0;
-            long dx = (x * w65535 / 65535) + l65535;
-            long dy = (y * h65535 / 65535) + t65535;
-            mouse_input.mi.dx = (int)dx;
-            mouse_input.mi.dy = (int)dy;
+
+            // x and y are in 0-65535 desktop-universal coordinates
+            // (output of ConvertToUniversalValue with desktopBounds).
+            // ABSOLUTE + VIRTUALDESK maps 0-65535 directly to the virtual
+            // desktop so we can reach every monitor, including those with
+            // negative physical coordinates (e.g. monitors to the left of
+            // or below the primary screen).
+            mouse_input.mi.dx = x;
+            mouse_input.mi.dy = y;
 
             Logger.LogDebug($"InputSimulation.MoveMouseEx: x = {x}, y = {y}.");
 
-            mouse_input.mi.dwFlags |= (int)(NativeMethods.MOUSEEVENTF.MOVE | NativeMethods.MOUSEEVENTF.ABSOLUTE);
+            mouse_input.mi.dwFlags |= (int)(NativeMethods.MOUSEEVENTF.MOVE | NativeMethods.MOUSEEVENTF.ABSOLUTE | NativeMethods.MOUSEEVENTF.VIRTUALDESK);
 
             Common.DoSomethingInTheInputSimulationThread(() =>
             {

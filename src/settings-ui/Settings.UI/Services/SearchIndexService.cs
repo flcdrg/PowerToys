@@ -102,6 +102,12 @@ namespace Microsoft.PowerToys.Settings.UI.Services
             var resourceLoader = ResourceLoaderInstance.ResourceLoader;
             SettingEntry[] metadataList;
 
+            if (resourceLoader == null)
+            {
+                Debug.WriteLine("[SearchIndexService] ResourceLoader is unavailable. Skipping index build.");
+                return;
+            }
+
             Debug.WriteLine($"[SearchIndexService] Attempting to load prebuilt index from: {PrebuiltIndexResourceName}");
 
             try

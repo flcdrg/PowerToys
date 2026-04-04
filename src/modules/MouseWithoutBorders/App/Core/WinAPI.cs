@@ -40,19 +40,56 @@ internal static class WinAPI
 
     internal static readonly List<Point> SensitivePoints = new();
 
+    /// <summary>
+    /// Physical pixel monitor bounds collected during <see cref="GetScreenConfig"/>.
+    /// These are authoritative physical coordinates from <c>GetMonitorInfo</c>,
+    /// unaffected by .NET DPI scaling issues in <see cref="Screen.AllScreens"/>.
+    /// </summary>
+    internal struct PhysicalMonitorInfo
+    {
+        internal string DeviceName;
+        internal int Left;
+        internal int Top;
+        internal int Right;
+        internal int Bottom;
+
+        internal int Width => Right - Left;
+
+        internal int Height => Bottom - Top;
+    }
+
+    private static readonly Lock _physicalMonitorsLock = new();
+    private static List<PhysicalMonitorInfo> _physicalMonitors = new();
+    private static List<PhysicalMonitorInfo> _newPhysicalMonitors;
+
+    internal static List<PhysicalMonitorInfo> PhysicalMonitors
+    {
+        get
+        {
+            lock (_physicalMonitorsLock)
+            {
+                return _physicalMonitors;
+            }
+        }
+    }
+
     private static bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdcMonitor, ref NativeMethods.RECT lprcMonitor, IntPtr dwData)
     {
         // lprcMonitor is wrong!!! => using GetMonitorInfo(...)
         // Log(String.Format( CultureInfo.CurrentCulture,"MONITOR: l{0}, t{1}, r{2}, b{3}", lprcMonitor.Left, lprcMonitor.Top, lprcMonitor.Right, lprcMonitor.Bottom));
         NativeMethods.MonitorInfoEx mi = default;
         mi.cbSize = Marshal.SizeOf(mi);
-        _ = NativeMethods.GetMonitorInfo(hMonitor, ref mi);
+        if (!NativeMethods.GetMonitorInfo(hMonitor, ref mi))
+        {
+            Logger.Log($"GetMonitorInfo failed for hMonitor={hMonitor} (cbSize={mi.cbSize}, LastError={Marshal.GetLastWin32Error()})");
+            return true;
+        }
 
         try
         {
             // For logging only
             _ = NativeMethods.GetDpiForMonitor(hMonitor, 0, out uint dpiX, out uint dpiY);
-            Logger.Log(string.Format(CultureInfo.CurrentCulture, "MONITOR: ({0}, {1}, {2}, {3}). DPI: ({4}, {5})", mi.rcMonitor.Left, mi.rcMonitor.Top, mi.rcMonitor.Right, mi.rcMonitor.Bottom, dpiX, dpiY));
+            Logger.Log(string.Format(CultureInfo.CurrentCulture, "MONITOR: ({0}, {1}, {2}, {3}). DPI: ({4}, {5}). Device: {6}", mi.rcMonitor.Left, mi.rcMonitor.Top, mi.rcMonitor.Right, mi.rcMonitor.Bottom, dpiX, dpiY, mi.szDeviceName));
         }
         catch (DllNotFoundException)
         {
@@ -66,6 +103,15 @@ internal static class WinAPI
         {
             Logger.Log(e);
         }
+
+        _newPhysicalMonitors?.Add(new PhysicalMonitorInfo
+        {
+            DeviceName = mi.szDeviceName ?? string.Empty,
+            Left = mi.rcMonitor.Left,
+            Top = mi.rcMonitor.Top,
+            Right = mi.rcMonitor.Right,
+            Bottom = mi.rcMonitor.Bottom,
+        });
 
         if (mi.rcMonitor.Left == 0 && mi.rcMonitor.Top == 0 && mi.rcMonitor.Right != 0 && mi.rcMonitor.Bottom != 0)
         {
@@ -155,7 +201,15 @@ internal static class WinAPI
                 SensitivePoints.Clear();
             }
 
+            _newPhysicalMonitors = new List<PhysicalMonitorInfo>();
             NativeMethods.EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, MonitorEnumProc, IntPtr.Zero);
+
+            lock (_physicalMonitorsLock)
+            {
+                _physicalMonitors = _newPhysicalMonitors;
+            }
+
+            _newPhysicalMonitors = null;
 
             // 1000 calls to EnumDisplayMonitors cost a dozen of milliseconds
 #endif

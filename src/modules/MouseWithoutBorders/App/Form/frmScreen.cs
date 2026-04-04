@@ -1,4 +1,4 @@
-﻿// Copyright (c) Microsoft Corporation
+// Copyright (c) Microsoft Corporation
 // The Microsoft Corporation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
@@ -379,7 +379,7 @@ namespace MouseWithoutBorders
                                 if (!shownSetupFormOneTime)
                                 {
                                     shownSetupFormOneTime = true;
-                                    MachineStuff.ShowMachineMatrix();
+                                    SetupFormManager.ShowMachineMatrix();
 
                                     if (Encryption.KeyCorrupted && !Setting.Values.FirstRun)
                                     {
@@ -496,7 +496,7 @@ namespace MouseWithoutBorders
 
                             if (!Common.RunOnLogonDesktop && !Common.RunOnScrSaverDesktop)
                             {
-                                MachineStuff.ShowMachineMatrix();
+                                SetupFormManager.ShowMachineMatrix();
 
                                 Common.MatrixForm?.UpdateKeyTextBox();
 
@@ -511,7 +511,7 @@ namespace MouseWithoutBorders
 
                             if (myKeyDaysToExpire <= 0)
                             {
-                                MachineStuff.ShowMachineMatrix();
+                                SetupFormManager.ShowMachineMatrix();
 
                                 Common.Sk?.Close(false);
 
@@ -601,7 +601,7 @@ namespace MouseWithoutBorders
 
         private void MenuMachineMatrix_Click(object sender, EventArgs e)
         {
-            MachineStuff.ShowMachineMatrix();
+            SetupFormManager.ShowMachineMatrix();
         }
 
         private void FrmScreen_MouseMove(object sender, MouseEventArgs e)
@@ -841,7 +841,7 @@ namespace MouseWithoutBorders
                 case NativeMethods.WM_SHOW_SETTINGS_FORM:
                     if (!Common.RunOnLogonDesktop && !Common.RunOnScrSaverDesktop)
                     {
-                        MachineStuff.ShowMachineMatrix();
+                        SetupFormManager.ShowMachineMatrix();
                     }
 
                     break;
@@ -856,7 +856,7 @@ namespace MouseWithoutBorders
         {
             if (e.Button == MouseButtons.Left)
             {
-                MachineStuff.ShowMachineMatrix();
+                SetupFormManager.ShowMachineMatrix();
             }
         }
 
@@ -949,7 +949,7 @@ namespace MouseWithoutBorders
 
         private void FrmScreen_Shown(object sender, EventArgs e)
         {
-            MachineStuff.AssertOneInstancePerDesktopSession();
+            ProcessInstanceGuard.AssertOneInstancePerDesktopSession();
 
             Common.MainForm = this;
             Hide();

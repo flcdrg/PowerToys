@@ -12,6 +12,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 
+using Microsoft.PowerToys.Settings.UI.Library;
 using MouseWithoutBorders.Core;
 
 namespace MouseWithoutBorders.Class
@@ -41,11 +42,13 @@ namespace MouseWithoutBorders.Class
     {
         private readonly Lock @lock;
         private readonly List<MachineInf> list;
+        private readonly Dictionary<string, List<MonitorLayoutInfo>> monitorMetadata;
 
         public MachinePool()
         {
             @lock = new Lock();
             list = new List<MachineInf>();
+            monitorMetadata = new Dictionary<string, List<MonitorLayoutInfo>>(StringComparer.OrdinalIgnoreCase);
         }
 
         // This will set the timestamp to current time, making the machine 'alive'.
@@ -339,6 +342,36 @@ namespace MouseWithoutBorders.Class
                             };
                     }
                 }
+            }
+        }
+
+        /// <summary>
+        /// Stores or replaces the monitor layout metadata for the specified machine.
+        /// </summary>
+        internal void UpdateMonitorMetadata(string machineName, List<MonitorLayoutInfo> monitors)
+        {
+            ArgumentNullException.ThrowIfNull(machineName);
+            ArgumentNullException.ThrowIfNull(monitors);
+
+            lock (@lock)
+            {
+                monitorMetadata[machineName] = monitors;
+            }
+        }
+
+        /// <summary>
+        /// Returns the monitor layout metadata previously stored for the specified machine,
+        /// or <see langword="null"/> if no metadata is available.
+        /// </summary>
+#nullable enable
+        internal List<MonitorLayoutInfo>? GetMonitorMetadata(string machineName)
+#nullable restore
+        {
+            ArgumentNullException.ThrowIfNull(machineName);
+
+            lock (@lock)
+            {
+                return monitorMetadata.TryGetValue(machineName, out List<MonitorLayoutInfo> result) ? result : null;
             }
         }
     }

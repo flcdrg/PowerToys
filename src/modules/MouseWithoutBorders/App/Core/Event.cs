@@ -174,6 +174,14 @@ internal static class Event
             Logger.LogDebug("No active connection found for " + newDesMachineName);
 
             // ShowToolTip("No active connection found for [" + newDesMachineName + "]!", 500);
+            // When monitor layout is enabled, the cursor may be sitting in the gap
+            // between the last local monitor and the offline machine's canvas position.
+            // Snap it back inside the nearest physical monitor so the gap-detection
+            // hook cannot fire the same failed transition on every subsequent mouse move.
+            if (Setting.IsMonitorLayoutEnabled && MachineStuff.desMachineID == Common.MachineID)
+            {
+                SnapCursorIntoCurrentMachineDisplay();
+            }
         }
         else
         {
@@ -233,6 +241,66 @@ internal static class Event
                 _ = Interlocked.Increment(ref Common.switchCount);
             }
         }
+    }
+
+    /// <summary>
+    /// Moves the cursor to the nearest safe position inside the current
+    /// machine's physical monitors.  Called when a monitor-layout-guided
+    /// transition to an offline machine fails so the cursor does not get
+    /// trapped in the gap between the local display and the offline machine's
+    /// canvas region.
+    /// </summary>
+    private static void SnapCursorIntoCurrentMachineDisplay()
+    {
+        var physMonitors = WinAPI.PhysicalMonitors;
+        if (physMonitors == null || physMonitors.Count == 0)
+        {
+            return;
+        }
+
+        int cx = myLastX;
+        int cy = myLastY;
+
+        // Find the nearest physical monitor (same algorithm as the gap detector).
+        WinAPI.PhysicalMonitorInfo bestPm = default;
+        int bestDist = int.MaxValue;
+        bool found = false;
+
+        foreach (var pm in physMonitors)
+        {
+            int clampedX = Math.Clamp(cx, pm.Left, pm.Right - 1);
+            int clampedY = Math.Clamp(cy, pm.Top, pm.Bottom - 1);
+            int dist = ((cx - clampedX) * (cx - clampedX)) + ((cy - clampedY) * (cy - clampedY));
+            if (dist < bestDist)
+            {
+                bestDist = dist;
+                bestPm = pm;
+                found = true;
+            }
+        }
+
+        if (!found || bestDist == 0)
+        {
+            // Cursor is already inside a monitor — no snap needed.
+            return;
+        }
+
+        // Clamp one pixel inside each edge so the edge-detection hook does not
+        // immediately re-fire and send the cursor back into the gap.
+        const int skipPixels = 1;
+        int snapX = Math.Clamp(cx, bestPm.Left + skipPixels, bestPm.Right - skipPixels - 1);
+        int snapY = Math.Clamp(cy, bestPm.Top + skipPixels, bestPm.Bottom - skipPixels - 1);
+
+        var db = MachineStuff.desktopBounds;
+        int xUniv = (snapX - db.Left) * 65535 / (db.Right - db.Left);
+        int yUniv = (snapY - db.Top) * 65535 / (db.Bottom - db.Top);
+
+        Logger.LogDebug($"SnapCursorIntoCurrentMachineDisplay: ({cx},{cy}) -> ({snapX},{snapY}) universal=({xUniv},{yUniv})");
+
+        MachineStuff.SwitchLocation.X = xUniv;
+        MachineStuff.SwitchLocation.Y = yUniv;
+        MachineStuff.SwitchLocation.ResetCount();
+        _ = Common.EvSwitch.Set();
     }
 
     internal static void SaveSwitchCount()

@@ -84,6 +84,14 @@ namespace Microsoft.PowerToys.Settings.UI.Library
         [CmdConfigureIgnoreAttribute]
         public List<string> MachineMatrixString { get; set; }
 
+        [JsonConverter(typeof(BoolPropertyJsonConverter))]
+        [CmdConfigureIgnoreAttribute]
+        public bool UseMonitorLayout { get; set; } = false;
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        [CmdConfigureIgnoreAttribute]
+        public List<MonitorLayoutInfo> MonitorLayout { get; set; }
+
         [CmdConfigureIgnoreAttribute]
         public StringProperty MachinePool { get; set; }
 

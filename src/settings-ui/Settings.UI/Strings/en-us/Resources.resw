@@ -486,6 +486,35 @@ opera.exe</value>
   <data name="MouseWithoutBorders_Switch2AllPcShortcut.Header" xml:space="preserve">
     <value>Control all computes are once</value>
   </data>
+  <data name="MouseWithoutBorders_ApplyLayout.Content" xml:space="preserve">
+    <value>Apply layout</value>
+  </data>
+  <data name="MouseWithoutBorders_LayoutSaved" xml:space="preserve">
+    <value>Layout saved</value>
+  </data>
+  <data name="MouseWithoutBorders_MonitorLayoutFallback" xml:space="preserve">
+    <value>Peers without monitor layout support will use machine-level routing.</value>
+    <comment>Shown as informational text about backward compatibility with older Mouse Without Borders peers.</comment>
+  </data>
+  <data name="MouseWithoutBorders_MonitorLayoutSettings.Header" xml:space="preserve">
+    <value>Monitor layout</value>
+  </data>
+  <data name="MouseWithoutBorders_MonitorTile_AutomationName" xml:space="preserve">
+    <value>Monitor tile</value>
+  </data>
+  <data name="MouseWithoutBorders_UseMonitorLayout.Description" xml:space="preserve">
+    <value>Arrange individual monitors from all connected machines in a spatial canvas. When enabled, the mouse moves between monitors rather than between machines.</value>
+    <comment>Description for the monitor layout feature toggle in Mouse Without Borders settings.</comment>
+  </data>
+  <data name="MouseWithoutBorders_UseMonitorLayout.Header" xml:space="preserve">
+    <value>Use monitor layout</value>
+  </data>
+  <data name="MouseWithoutBorders_UseMonitorLayout_ToggleSwitch.OffContent" xml:space="preserve">
+    <value>Off</value>
+  </data>
+  <data name="MouseWithoutBorders_UseMonitorLayout_ToggleSwitch.OnContent" xml:space="preserve">
+    <value>On</value>
+  </data>
   <data name="Shell_General.Content" xml:space="preserve">
     <value>General</value>
     <comment>Navigation view item name for General</comment>

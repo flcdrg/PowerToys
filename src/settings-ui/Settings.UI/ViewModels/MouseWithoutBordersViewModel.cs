@@ -4,27 +4,20 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Globalization;
-using System.IO;
-using System.IO.Pipes;
-using System.Linq;
 using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using global::PowerToys.GPOWrapper;
 using ManagedCommon;
-using Microsoft.PowerToys.Settings.UI.Helpers;
 using Microsoft.PowerToys.Settings.UI.Library;
-using Microsoft.PowerToys.Settings.UI.Library.Helpers;
 using Microsoft.PowerToys.Settings.UI.Library.Interfaces;
 using Microsoft.PowerToys.Settings.UI.Library.ViewModels.Commands;
 using Microsoft.PowerToys.Settings.UI.SerializationContext;
-using Microsoft.UI;
 using Microsoft.UI.Dispatching;
-using Microsoft.UI.Xaml.Media;
-using StreamJsonRpc;
+using PowerToys.GPOWrapper;
 using Windows.ApplicationModel.DataTransfer;
 
 namespace Microsoft.PowerToys.Settings.UI.ViewModels
@@ -41,23 +34,7 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
             0,
         };
 
-        private readonly Lock _machineMatrixStringLock = new();
-
         private bool _disposed;
-
-        private static readonly Dictionary<SocketStatus, Brush> StatusColors = new Dictionary<SocketStatus, Brush>()
-        {
-            { SocketStatus.NA, new SolidColorBrush(ColorHelper.FromArgb(0, 0x71, 0x71, 0x71)) },
-            { SocketStatus.Resolving, new SolidColorBrush(Colors.Yellow) },
-            { SocketStatus.Connecting, new SolidColorBrush(Colors.Orange) },
-            { SocketStatus.Handshaking, new SolidColorBrush(Colors.Blue) },
-            { SocketStatus.Error, new SolidColorBrush(Colors.Red) },
-            { SocketStatus.ForceClosed, new SolidColorBrush(Colors.Purple) },
-            { SocketStatus.InvalidKey, new SolidColorBrush(Colors.Brown) },
-            { SocketStatus.Timeout, new SolidColorBrush(Colors.Pink) },
-            { SocketStatus.SendError, new SolidColorBrush(Colors.Maroon) },
-            { SocketStatus.Connected, new SolidColorBrush(Colors.Green) },
-        };
 
         private bool _connectFieldsVisible;
 
@@ -86,7 +63,7 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
                 if (!_useOriginalUserInterfaceIsGPOConfigured && (Settings.Properties.ShowOriginalUI != value))
                 {
                     Settings.Properties.ShowOriginalUI = value;
-                    NotifyPropertyChanged(nameof(ShowOriginalUI));
+                    NotifyPropertyChanged();
                 }
             }
         }
@@ -120,7 +97,7 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
                 if (valueChanged)
                 {
                     Settings.Properties.UseService = value;
-                    OnPropertyChanged(nameof(UseService));
+                    OnPropertyChanged();
                     OnPropertyChanged(nameof(CanUninstallService));
                     OnPropertyChanged(nameof(ShowInfobarRunAsAdminText));
 
@@ -132,7 +109,7 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
                         _uiDispatcherQueue.TryEnqueue(DispatcherQueuePriority.Normal, () =>
                         {
                             Settings.Properties.UseService = value;
-                            NotifyPropertyChanged(nameof(UseService));
+                            NotifyPropertyChanged();
                         });
                     });
                 }
@@ -150,7 +127,7 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
                 if (_connectFieldsVisible != value)
                 {
                     _connectFieldsVisible = value;
-                    OnPropertyChanged(nameof(ConnectFieldsVisible));
+                    OnPropertyChanged();
                 }
             }
         }
@@ -166,7 +143,7 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
                 if (_connectSecurityKey != value)
                 {
                     _connectSecurityKey = value;
-                    OnPropertyChanged(nameof(ConnectSecurityKey));
+                    OnPropertyChanged();
                 }
             }
         }
@@ -182,17 +159,16 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
                 if (_connectPCName != value)
                 {
                     _connectPCName = value;
-                    OnPropertyChanged(nameof(ConnectPCName));
+                    OnPropertyChanged();
                 }
             }
         }
 
-        private SettingsUtils SettingsUtils { get; set; }
+        private SettingsUtils SettingsUtils { get; }
 
-        private GeneralSettings GeneralSettingsConfig { get; set; }
+        private GeneralSettings GeneralSettingsConfig { get; }
 
         private GpoRuleConfigured _enabledGpoRuleConfiguration;
-        private bool _enabledStateIsGPOConfigured;
         private bool _isEnabled;
 
         // Configuration policy variables
@@ -230,203 +206,16 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
             }
         }
 
-        public bool IsEnabledGpoConfigured
-        {
-            get => _enabledStateIsGPOConfigured;
-        }
-
-        private enum SocketStatus : int
-        {
-            NA = 0,
-            Resolving = 1,
-            Connecting = 2,
-            Handshaking = 3,
-            Error = 4,
-            ForceClosed = 5,
-            InvalidKey = 6,
-            Timeout = 7,
-            SendError = 8,
-            Connected = 9,
-        }
-
-        private interface ISettingsSyncHelper
-        {
-            [Newtonsoft.Json.JsonObject(Newtonsoft.Json.MemberSerialization.OptIn)]
-            public struct MachineSocketState
-            {
-                // Disable false-positive warning due to IPC
-#pragma warning disable CS0649
-                [Newtonsoft.Json.JsonProperty]
-                public string Name;
-
-                [Newtonsoft.Json.JsonProperty]
-                public SocketStatus Status;
-#pragma warning restore CS0649
-            }
-
-            void Shutdown();
-
-            void Reconnect();
-
-            void GenerateNewKey();
-
-            void ConnectToMachine(string machineName, string securityKey);
-
-            Task<MachineSocketState[]> RequestMachineSocketStateAsync();
-        }
-
-        private static CancellationTokenSource _cancellationTokenSource;
-
-        private static Task _machinePollingThreadTask;
-
-        private static VisualStudio.Threading.AsyncSemaphore _ipcSemaphore = new VisualStudio.Threading.AsyncSemaphore(1);
-
-        private sealed partial class SyncHelper : IDisposable
-        {
-            public SyncHelper(NamedPipeClientStream stream)
-            {
-                Stream = stream;
-                Endpoint = JsonRpc.Attach<ISettingsSyncHelper>(Stream);
-            }
-
-            public NamedPipeClientStream Stream { get; }
-
-            public ISettingsSyncHelper Endpoint { get; private set; }
-
-            public void Dispose()
-            {
-                ((IDisposable)Endpoint).Dispose();
-            }
-        }
-
-        private static NamedPipeClientStream syncHelperStream;
-
-        private async Task<SyncHelper> GetSettingsSyncHelperAsync()
-        {
-            try
-            {
-                var recreateStream = false;
-                if (syncHelperStream == null)
-                {
-                    recreateStream = true;
-                }
-                else
-                {
-                    if (!syncHelperStream.IsConnected || !syncHelperStream.CanWrite)
-                    {
-                        await syncHelperStream.DisposeAsync();
-                        recreateStream = true;
-                    }
-                }
-
-                if (recreateStream)
-                {
-                    syncHelperStream = new NamedPipeClientStream(".", "MouseWithoutBorders/SettingsSync", PipeDirection.InOut, PipeOptions.Asynchronous);
-                    await syncHelperStream.ConnectAsync(10000);
-                }
-
-                return new SyncHelper(syncHelperStream);
-            }
-            catch (Exception ex)
-            {
-                if (IsEnabled)
-                {
-                    Logger.LogError($"Couldn't create SettingsSync: {ex}");
-                }
-
-                return null;
-            }
-        }
-
-        public async Task SubmitShutdownRequestAsync()
-        {
-            using (await _ipcSemaphore.EnterAsync())
-            {
-                using (var syncHelper = await GetSettingsSyncHelperAsync())
-                {
-                    syncHelper?.Endpoint?.Shutdown();
-                    var task = syncHelper?.Stream.FlushAsync();
-                    if (task != null)
-                    {
-                        await task;
-                    }
-                }
-            }
-        }
-
-        public async Task SubmitReconnectRequestAsync()
-        {
-            using (await _ipcSemaphore.EnterAsync())
-            {
-                using (var syncHelper = await GetSettingsSyncHelperAsync())
-                {
-                    syncHelper?.Endpoint?.Reconnect();
-                    var task = syncHelper?.Stream.FlushAsync();
-                    if (task != null)
-                    {
-                        await task;
-                    }
-                }
-            }
-        }
-
-        public async Task SubmitNewKeyRequestAsync()
-        {
-            using (await _ipcSemaphore.EnterAsync())
-            {
-                using (var syncHelper = await GetSettingsSyncHelperAsync())
-                {
-                    syncHelper?.Endpoint?.GenerateNewKey();
-                    var task = syncHelper?.Stream.FlushAsync();
-                    if (task != null)
-                    {
-                        await task;
-                    }
-                }
-            }
-        }
-
-        public async Task SubmitConnectionRequestAsync(string pcName, string securityKey)
-        {
-            using (await _ipcSemaphore.EnterAsync())
-            {
-                using (var syncHelper = await GetSettingsSyncHelperAsync())
-                {
-                    syncHelper?.Endpoint?.ConnectToMachine(pcName, securityKey);
-                    var task = syncHelper?.Stream.FlushAsync();
-                    if (task != null)
-                    {
-                        await task;
-                    }
-                }
-            }
-        }
-
-        private async Task<ISettingsSyncHelper.MachineSocketState[]> PollMachineSocketStateAsync()
-        {
-            using (await _ipcSemaphore.EnterAsync())
-            {
-                using (var syncHelper = await GetSettingsSyncHelperAsync())
-                {
-                    var task = syncHelper?.Endpoint?.RequestMachineSocketStateAsync();
-                    if (task != null)
-                    {
-                        return await task;
-                    }
-                    else
-                    {
-                        return null;
-                    }
-                }
-            }
-        }
+        public bool IsEnabledGpoConfigured { get; private set; }
 
         private MouseWithoutBordersSettings Settings { get; set; }
 
-        private DispatcherQueue _uiDispatcherQueue;
+        private readonly DispatcherQueue _uiDispatcherQueue;
 
         public MouseWithoutBordersViewModel(SettingsUtils settingsUtils, ISettingsRepository<GeneralSettings> settingsRepository, Func<string, int> ipcMSGCallBackFunc, DispatcherQueue uiDispatcherQueue)
         {
+            Logger.LogInfo("[MWB] MouseWithoutBordersViewModel constructor called");
+
             SettingsUtils = settingsUtils;
 
             _uiDispatcherQueue = uiDispatcherQueue;
@@ -440,8 +229,7 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
             InitializePolicyValues();
 
             // MouseWithoutBorders settings may be changed by the logic in the utility as machines connect. We need to get a fresh version every time instead of using a repository.
-            MouseWithoutBordersSettings moduleSettings;
-            moduleSettings = SettingsUtils.GetSettingsOrDefault<MouseWithoutBordersSettings>("MouseWithoutBorders");
+            var moduleSettings = SettingsUtils.GetSettingsOrDefault<MouseWithoutBordersSettings>("MouseWithoutBorders");
 
             LoadViewModelFromSettings(moduleSettings);
 
@@ -452,65 +240,27 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
 
             _cancellationTokenSource = new CancellationTokenSource();
 
-            _machinePollingThreadTask = StartMachineStatusPollingThread(_machinePollingThreadTask, _cancellationTokenSource.Token);
-        }
+            Logger.LogInfo("[MWB] About to start polling thread, _cancellationTokenSource created");
+            try
+            {
+                _machinePollingThreadTask = StartMachineStatusPollingThread(_machinePollingThreadTask, _cancellationTokenSource.Token);
+                Logger.LogInfo("[MWB] Polling thread started successfully");
+            }
+            catch (Exception ex)
+            {
+                Logger.LogInfo($"[MWB] Exception starting polling thread: {ex}");
+            }
 
-        private Task StartMachineStatusPollingThread(Task previousThreadTask, CancellationToken token)
-        {
-            return Task.Run(
-                async () =>
-                {
-                    previousThreadTask?.Wait();
-
-                    while (!token.IsCancellationRequested)
-                    {
-                        Dictionary<string, ISettingsSyncHelper.MachineSocketState> states = null;
-                        try
-                        {
-                            states = (await PollMachineSocketStateAsync())?.ToDictionary(s => s.Name, StringComparer.OrdinalIgnoreCase);
-                        }
-                        catch (Exception ex)
-                        {
-                            Logger.LogInfo($"Poll ISettingsSyncHelper.MachineSocketState error: {ex}");
-                            continue;
-                        }
-
-                        if (states != null)
-                        {
-                            lock (_machineMatrixStringLock)
-                            {
-                                foreach (var machine in machineMatrixString)
-                                {
-                                    if (states.TryGetValue(machine.Item.Name, out var state))
-                                    {
-                                        _uiDispatcherQueue.TryEnqueue(DispatcherQueuePriority.Normal, () =>
-                                        {
-                                            try
-                                            {
-                                                machine.Item.StatusBrush = StatusColors[state.Status];
-                                            }
-                                            catch (Exception)
-                                            {
-                                            }
-                                        });
-                                    }
-                                }
-                            }
-                        }
-
-                        Thread.Sleep(500);
-                    }
-                },
-                _cancellationTokenSource.Token);
+            Logger.LogInfo("[MWB] MouseWithoutBordersViewModel constructor completed");
         }
 
         private void InitializeEnabledValue()
         {
             _enabledGpoRuleConfiguration = GPOWrapper.GetConfiguredMouseWithoutBordersEnabledValue();
-            if (_enabledGpoRuleConfiguration == GpoRuleConfigured.Disabled || _enabledGpoRuleConfiguration == GpoRuleConfigured.Enabled)
+            if (_enabledGpoRuleConfiguration is GpoRuleConfigured.Disabled or GpoRuleConfigured.Enabled)
             {
                 // Get the enabled state from GPO.
-                _enabledStateIsGPOConfigured = true;
+                IsEnabledGpoConfigured = true;
                 _isEnabled = _enabledGpoRuleConfiguration == GpoRuleConfigured.Enabled;
             }
             else
@@ -571,72 +321,17 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
             _selectedSwitchBetweenMachineShortcutOptionsIndex = Array.IndexOf(_switchBetweenMachineShortcutOptions, moduleSettings.Properties.HotKeySwitchMachine.Value);
             _easyMouseOptionIndex = (EasyMouseOption)moduleSettings.Properties.EasyMouse.Value;
 
+            _monitorLayouts = new ObservableCollection<MonitorLayoutInfo>(
+                moduleSettings.Properties.MonitorLayout ?? new List<MonitorLayoutInfo>());
+
             LoadMachineMatrixString();
-        }
 
-        // Loads the machine matrix, taking into account changes to the machine pool.
-        private void LoadMachineMatrixString()
-        {
-            List<string> loadMachineMatrixString = Settings.Properties.MachineMatrixString ?? new List<string>() { string.Empty, string.Empty, string.Empty, string.Empty };
-
-            if (loadMachineMatrixString.Count < 4)
-            {
-                // Current logic of MWB assumes there are always 4 slots. Any other configuration means data corruption here.
-                loadMachineMatrixString = new List<string>() { string.Empty, string.Empty, string.Empty, string.Empty };
-            }
-
-            bool editedTheMatrix = false; // keep track of changes to the matrix because of changes to the available machine pool.
-
-            if (!string.IsNullOrEmpty(Settings.Properties.MachinePool?.Value))
-            {
-                List<string> availableMachines = new List<string>();
-
-                // Format of this field is "NAME1:ID1,NAME2:ID2,..."
-                // Load the available machines
-                foreach (string availableMachineIdPair in Settings.Properties.MachinePool.Value.Split(","))
-                {
-                    string availableMachineName = availableMachineIdPair.Split(':')[0];
-                    availableMachines.Add(availableMachineName);
-                }
-
-                // Start by removing the machines from the matrix that are no longer available to pick.
-                for (int i = 0; i < loadMachineMatrixString.Count; i++)
-                {
-                    if (!availableMachines.Contains(loadMachineMatrixString[i]))
-                    {
-                        editedTheMatrix = true;
-                        loadMachineMatrixString[i] = string.Empty;
-                    }
-                }
-
-                // If an available machine is not in the matrix already, fill it in the first available spot.
-                foreach (string availableMachineName in availableMachines)
-                {
-                    if (!loadMachineMatrixString.Contains(availableMachineName))
-                    {
-                        int availableIndex = loadMachineMatrixString.FindIndex(name => string.IsNullOrEmpty(name));
-                        if (availableIndex >= 0)
-                        {
-                            loadMachineMatrixString[availableIndex] = availableMachineName;
-                            editedTheMatrix = true;
-                        }
-                    }
-                }
-            }
-
-            // Dragging while elevated crashes on WinUI3: https://github.com/microsoft/microsoft-ui-xaml/issues/7690
-            machineMatrixString = new IndexedObservableCollection<DeviceViewModel>(loadMachineMatrixString.Select(name => new DeviceViewModel { Name = name, CanDragDrop = !IsElevated }));
-
-            if (editedTheMatrix)
-            {
-                // Set the property directly to save the new matrix right away with the new available machines.
-                MachineMatrixString = machineMatrixString;
-            }
+            RebuildMonitorViewModels();
         }
 
         public bool CanBeEnabled
         {
-            get => !_enabledStateIsGPOConfigured;
+            get => !IsEnabledGpoConfigured;
         }
 
         public bool CanToggleUseService
@@ -652,7 +347,7 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
             get => _isEnabled;
             set
             {
-                if (_enabledStateIsGPOConfigured)
+                if (IsEnabledGpoConfigured)
                 {
                     // If it's GPO configured, shouldn't be able to change this state.
                     return;
@@ -662,7 +357,7 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
                 {
                     _isEnabled = value;
                     GeneralSettingsConfig.Enabled.MouseWithoutBorders = value;
-                    OnPropertyChanged(nameof(IsEnabled));
+                    OnPropertyChanged();
                     OnPropertyChanged(nameof(ShowInfobarRunAsAdminText));
                     OnPropertyChanged(nameof(ShowInfobarCannotDragDropAsAdmin));
                     OnPropertyChanged(nameof(ShowPolicyConfiguredInfoForBehaviorSettings));
@@ -692,7 +387,7 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
                             NotifyPropertyChanged();
 
                             // Disable service mode if we're not elevated, because we cannot register service in that case
-                            if (value == true && !IsElevated && UseService)
+                            if (value && !IsElevated && UseService)
                             {
                                 UseService = false;
                             }
@@ -1037,7 +732,7 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
                 {
                     _easyMouseOptionIndex = (EasyMouseOption)value;
                     Settings.Properties.EasyMouse.Value = value;
-                    NotifyPropertyChanged(nameof(EasyMouseOptionIndex));
+                    NotifyPropertyChanged();
                 }
             }
         }
@@ -1183,56 +878,6 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
             }
         }
 
-        private IndexedObservableCollection<DeviceViewModel> machineMatrixString;
-
-        public partial class DeviceViewModel : Observable
-        {
-            public string Name { get; set; }
-
-            public bool CanDragDrop { get; set; }
-
-            private Brush _statusBrush = StatusColors[SocketStatus.NA];
-
-            public Brush StatusBrush
-            {
-                get
-                {
-                    return _statusBrush;
-                }
-
-                set
-                {
-                    if (_statusBrush != value)
-                    {
-                        _statusBrush = value;
-                        OnPropertyChanged(nameof(StatusBrush));
-                    }
-                }
-            }
-        }
-
-        public IndexedObservableCollection<DeviceViewModel> MachineMatrixString
-        {
-            get
-            {
-                lock (_machineMatrixStringLock)
-                {
-                    return machineMatrixString;
-                }
-            }
-
-            set
-            {
-                lock (_machineMatrixStringLock)
-                {
-                    machineMatrixString = value;
-                }
-
-                Settings.Properties.MachineMatrixString = new List<string>(value.ToEnumerable().Select(d => d.Name));
-                NotifyPropertyChanged();
-            }
-        }
-
         public bool ShowClipboardAndNetworkStatusMessages
         {
             get
@@ -1257,7 +902,7 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
                 LoadViewModelFromSettings(SettingsUtils.GetSettings<MouseWithoutBordersSettings>("MouseWithoutBorders"));
                 return true;
             }
-            catch (System.Exception ex)
+            catch (Exception ex)
             {
                 Logger.LogError(ex.Message);
                 return false;
@@ -1293,6 +938,22 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
         public void NotifyUpdatedSettings()
         {
             OnPropertyChanged(null); // Notify all properties might have changed.
+
+            // If monitor layout mode is active, the layout may have been updated externally
+            // (e.g. received from a connected peer via the TCP side-channel).  Calling
+            // OnPropertyChanged(null) alone does not trigger RebuildMonitorViewModels, so
+            // we do it explicitly here.  This ensures Della's canvas shows the full
+            // multi-machine layout as soon as Delphinium pushes it, without requiring the
+            // user to navigate away and back to the page.
+            if (Settings.Properties.UseMonitorLayout)
+            {
+                var latestLayout = Settings.Properties.MonitorLayout;
+                if (latestLayout is { Count: > 0 })
+                {
+                    _monitorLayouts = new ObservableCollection<MonitorLayoutInfo>(latestLayout);
+                    RebuildMonitorViewModels();
+                }
+            }
         }
 
         public void NotifyPropertyChanged([CallerMemberName] string propertyName = null)
@@ -1357,8 +1018,10 @@ namespace Microsoft.PowerToys.Settings.UI.ViewModels
                         syncHelperStream = null;
                     }
 
-                    // Dispose the semaphore
-                    _ipcSemaphore?.Dispose();
+                    // Do not dispose _ipcSemaphore here: it is a static field shared across all
+                    // instances of this class. Disposing it from an instance Dispose() permanently
+                    // destroys the semaphore, causing ObjectDisposedException on every subsequent
+                    // IPC call when the ViewModel is re-created (e.g. navigating back to the page).
                 }
 
                 _disposed = true;

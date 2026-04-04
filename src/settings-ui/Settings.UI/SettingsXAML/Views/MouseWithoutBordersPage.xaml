@@ -13,7 +13,10 @@
     AutomationProperties.LandmarkType="Main"
     mc:Ignorable="d">
     <local:NavigablePage.Resources>
-        <tkconverters:BoolToVisibilityConverter x:Key="negativeBoolToVisibilityConverter" />
+        <tkconverters:BoolToVisibilityConverter
+            x:Key="negativeBoolToVisibilityConverter"
+            FalseValue="Visible"
+            TrueValue="Collapsed" />
         <tkconverters:BoolToObjectConverter
             x:Key="OneRowMatrixBoolToNumberOfRowsConverter"
             FalseValue="2"
@@ -98,9 +101,18 @@
                     </tkcontrols:SettingsCard>
                 </controls:SettingsGroup>
                 <controls:SettingsGroup
+                    x:Name="MonitorLayoutModeSettingsGroup"
+                    x:Uid="MouseWithoutBorders_MonitorLayoutMode"
+                    IsEnabled="{x:Bind ViewModel.IsEnabled, Mode=OneWay}">
+                    <tkcontrols:SettingsCard Name="MouseWithoutBordersUseMonitorLayout" x:Uid="MouseWithoutBorders_UseMonitorLayout">
+                        <ToggleSwitch x:Uid="MouseWithoutBorders_UseMonitorLayout_ToggleSwitch" IsOn="{x:Bind ViewModel.UseMonitorLayout, Mode=TwoWay}" />
+                    </tkcontrols:SettingsCard>
+                </controls:SettingsGroup>
+                <controls:SettingsGroup
                     x:Name="DeviceLayoutSettingsGroup"
                     x:Uid="MouseWithoutBorders_DeviceLayoutSettings"
-                    IsEnabled="{x:Bind ViewModel.IsEnabled, Mode=OneWay}">
+                    IsEnabled="{x:Bind ViewModel.IsEnabled, Mode=OneWay}"
+                    Visibility="{x:Bind ViewModel.UseMonitorLayout, Mode=OneWay, Converter={StaticResource negativeBoolToVisibilityConverter}}">
                     <tkcontrols:SettingsCard
                         HorizontalContentAlignment="Stretch"
                         Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
@@ -175,8 +187,45 @@
                         IsOpen="{x:Bind ViewModel.ShowInfobarCannotDragDropAsAdmin, Mode=OneWay}"
                         IsTabStop="{x:Bind ViewModel.ShowInfobarCannotDragDropAsAdmin, Mode=OneWay}"
                         Severity="Informational" />
-                    <tkcontrols:SettingsCard Name="MouseWithoutBordersMatrixOneRow" x:Uid="MouseWithoutBorders_MatrixOneRow">
+                    <tkcontrols:SettingsCard Name="MouseWithoutBordersMatrixOneRow" x:Uid="MouseWithoutBorders_MatrixOneRow" IsEnabled="{x:Bind ViewModel.IsMatrixOneRowSettingEnabled, Mode=OneWay}">
                         <ToggleSwitch x:Uid="MouseWithoutBorders_MatrixOneRow_ToggleSwitch" IsOn="{x:Bind ViewModel.MatrixOneRow, Mode=TwoWay}" />
+                    </tkcontrols:SettingsCard>
+                </controls:SettingsGroup>
+                <controls:SettingsGroup
+                    x:Name="MonitorLayoutSettingsGroup"
+                    x:Uid="MouseWithoutBorders_MonitorLayoutSettings"
+                    IsEnabled="{x:Bind ViewModel.IsEnabled, Mode=OneWay}"
+                    Visibility="{x:Bind ViewModel.UseMonitorLayout, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                    <tkcontrols:SettingsCard
+                        HorizontalContentAlignment="Stretch"
+                        Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+                        ContentAlignment="Vertical">
+                        <StackPanel Orientation="Vertical" Spacing="8">
+                            <Border
+                                HorizontalAlignment="Left"
+                                BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+                                BorderThickness="1"
+                                CornerRadius="4">
+                                <Canvas
+                                    x:Name="MonitorCanvas"
+                                    Width="800"
+                                    Height="500"
+                                    AutomationProperties.Name="Monitor layout canvas" />
+                            </Border>
+                            <StackPanel HorizontalAlignment="Right" Orientation="Horizontal" Spacing="8">
+                                <TextBlock
+                                    x:Name="MonitorLayoutStatusText"
+                                    VerticalAlignment="Center"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Visibility="Collapsed" />
+                                <Button
+                                    x:Name="ApplyMonitorLayoutButton"
+                                    x:Uid="MouseWithoutBorders_ApplyLayout"
+                                    AutomationProperties.Name="Apply monitor layout"
+                                    Click="ApplyMonitorLayout_Click"
+                                    Style="{StaticResource AccentButtonStyle}" />
+                            </StackPanel>
+                        </StackPanel>
                     </tkcontrols:SettingsCard>
                 </controls:SettingsGroup>
                 <controls:SettingsGroup

@@ -1,8 +1,9 @@
-﻿// Copyright (c) Microsoft Corporation
+// Copyright (c) Microsoft Corporation
 // The Microsoft Corporation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Drawing;
@@ -205,6 +206,31 @@ internal static class Common
 
     internal static int ScreenWidth => Common.screenWidth;
 
+    /// <summary>
+    /// Enumerates the local monitors and returns their layout information.
+    /// </summary>
+    /// <param name="machineName">The machine name to associate with each monitor entry.</param>
+    /// <returns>A list of <see cref="MonitorLayoutInfo"/> describing each connected screen.</returns>
+    internal static List<MonitorLayoutInfo> GetLocalMonitors(string machineName)
+    {
+        List<MonitorLayoutInfo> monitors = new();
+        foreach (Screen screen in Screen.AllScreens)
+        {
+            monitors.Add(new MonitorLayoutInfo
+            {
+                MachineName = machineName,
+                MonitorId = screen.DeviceName,
+                X = screen.Bounds.X,
+                Y = screen.Bounds.Y,
+                Width = screen.Bounds.Width,
+                Height = screen.Bounds.Height,
+                IsPrimary = screen.Primary,
+            });
+        }
+
+        return monitors;
+    }
+
     internal static bool Is64bitOS
     {
         get; set;
@@ -353,7 +379,7 @@ internal static class Common
                 Logger.TelemetryLogTrace($"[{actionName}] took more than {(long)timeout.TotalSeconds}, restarting the process.", SeverityLevel.Warning, true);
 
                 string desktop = WinAPI.GetMyDesktop();
-                MachineStuff.oneInstanceCheck?.Close();
+                ProcessInstanceGuard.oneInstanceCheck?.Close();
                 _ = Process.Start(Application.ExecutablePath, desktop);
                 Logger.LogDebug($"Started on desktop {desktop}");
 
@@ -755,7 +781,7 @@ internal static class Common
             {
                 if (Setting.Values.FirstRun)
                 {
-                    MachineStuff.Settings?.ShowTip(icon, tip, timeOutInMilliseconds);
+                    SetupFormManager.Settings?.ShowTip(icon, tip, timeOutInMilliseconds);
                 }
 
                 Common.MatrixForm?.ShowTip(icon, tip, timeOutInMilliseconds);
@@ -1213,7 +1239,7 @@ internal static class Common
             }
         }
 
-        if (machineCt < 2 && MachineStuff.Settings != null && (MachineStuff.Settings.GetCurrentPage() is SetupPage1 || MachineStuff.Settings.GetCurrentPage() is SetupPage2b))
+        if (machineCt < 2 && SetupFormManager.Settings != null && (SetupFormManager.Settings.GetCurrentPage() is SetupPage1 || SetupFormManager.Settings.GetCurrentPage() is SetupPage2b))
         {
             MachineStuff.MachineMatrix = new string[MachineStuff.MAX_MACHINE] { Common.MachineName.Trim(), desMachine, string.Empty, string.Empty };
             Logger.LogDebug("UpdateSetupMachineMatrix: " + string.Join(",", MachineStuff.MachineMatrix));
@@ -1221,7 +1247,7 @@ internal static class Common
             Common.DoSomethingInUIThread(
                 () =>
                 {
-                    MachineStuff.Settings.SetControlPage(new SetupPage4());
+                    SetupFormManager.Settings.SetControlPage(new SetupPage4());
                 },
                 true);
         }
@@ -1240,6 +1266,16 @@ internal static class Common
                 {
                     Sk = null; // TODO: This looks redundant.
                     tmpSk.Close(byUser);
+                }
+
+                // A user-initiated reconnect means either the security key
+                // changed or the user explicitly requested reconnection.  Any
+                // previously-detected key mismatch is no longer relevant, so
+                // clear the flag so that UpdateTCPClients can attempt new
+                // connections with the current key.
+                if (byUser)
+                {
+                    SocketStuff.InvalidKeyFound = false;
                 }
 
                 Sk = new SocketStuff(tcpPort, byUser);

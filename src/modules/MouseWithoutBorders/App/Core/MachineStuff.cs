@@ -3,13 +3,12 @@
 // See the LICENSE file in the project root for more information.
 
 using System;
-using System.Diagnostics;
+using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Drawing;
 using System.Linq;
 using System.Threading;
-using System.Windows.Forms;
-
+using Microsoft.PowerToys.Settings.UI.Library;
 using Microsoft.PowerToys.Telemetry;
 using MouseWithoutBorders.Class;
 
@@ -28,10 +27,7 @@ internal static class MachineStuff
     private static readonly Lock McMatrixLock = new();
 
     internal const byte MAX_MACHINE = 4;
-    private const byte MAX_SOCKET = MAX_MACHINE * 2;
     internal const long HEARTBEAT_TIMEOUT = 1500000; // 30 Mins
-    private const int SKIP_PIXELS = 1;
-    private const int JUMP_PIXELS = 2;
 
 #pragma warning disable SA1307 // Accessible fields should begin with upper-case letter
     internal static ID desMachineID;
@@ -56,6 +52,182 @@ internal static class MachineStuff
             _machinePool ??= new MachinePool();
             return _machinePool;
         }
+    }
+
+    private static readonly MonitorLayoutNavigator _monitorLayoutNavigator = new MonitorLayoutNavigator();
+    private static readonly DeviceLayoutNavigator _deviceLayoutNavigator = new DeviceLayoutNavigator();
+    private static ILayoutNavigator _layoutNavigator = _deviceLayoutNavigator;
+
+    internal static void RebuildMonitorLayout()
+    {
+        bool useLayout = Setting.Values.UseMonitorLayout;
+        var layout = Setting.Values.MonitorLayout;
+        int count = layout?.Count ?? 0;
+        Logger.LogDebug($"RebuildMonitorLayout: UseMonitorLayout={useLayout}, MonitorLayout count={count}, IsMonitorLayoutEnabled={Setting.IsMonitorLayoutEnabled}");
+
+        if (Setting.IsMonitorLayoutEnabled)
+        {
+            foreach (var m in layout)
+            {
+                Logger.LogDebug($"  Monitor: {m.MachineName}|{m.MonitorId} at ({m.X},{m.Y}) size {m.Width}x{m.Height}");
+            }
+
+            var patchedLayout = MonitorLayoutPatcher.Patch(layout, Common.MachineName, WinAPI.PhysicalMonitors, desktopBounds);
+            _monitorLayoutNavigator.OnLayoutChanged(patchedLayout);
+            _layoutNavigator = _monitorLayoutNavigator;
+            Logger.LogDebug("RebuildMonitorLayout: adjacency rebuilt.");
+        }
+        else
+        {
+            Logger.LogDebug("RebuildMonitorLayout: monitor layout disabled, clearing adjacency");
+            _monitorLayoutNavigator.OnLayoutChanged(null);
+            _layoutNavigator = _deviceLayoutNavigator;
+        }
+    }
+
+    /// <summary>
+    /// Rebuilds the monitor adjacency snapshot from an externally supplied layout (e.g.
+    /// received via the MonitorMetadata side-channel) WITHOUT touching
+    /// <see cref="Setting.Values.MonitorLayout"/> or saving to disk.
+    /// <para>
+    /// Saving a peer's canvas coordinates to the local settings.json would cause layout
+    /// thrashing: the two machines use different canvas origins, so each machine's stored
+    /// layout conflicts with the other's, causing the adjacency to oscillate between them
+    /// on every reconnect.
+    /// </para>
+    /// </summary>
+    internal static void RebuildMonitorLayoutFromList(List<MonitorLayoutInfo> layout)
+    {
+        if (layout == null || layout.Count == 0)
+        {
+            return;
+        }
+
+        Logger.LogDebug($"RebuildMonitorLayoutFromList: {layout.Count} monitors");
+        foreach (var m in layout)
+        {
+            Logger.LogDebug($"  Monitor: {m.MachineName}|{m.MonitorId} at ({m.X},{m.Y}) size {m.Width}x{m.Height}");
+        }
+
+        var patchedLayout = MonitorLayoutPatcher.Patch(layout, Common.MachineName, WinAPI.PhysicalMonitors, desktopBounds);
+        _monitorLayoutNavigator.OnLayoutChanged(patchedLayout);
+        Logger.LogDebug("RebuildMonitorLayoutFromList: adjacency rebuilt.");
+    }
+
+    /// <summary>
+    /// Updates <see cref="Setting.Values.MonitorLayout"/> from an authoritative full layout
+    /// received from a connected peer so every machine renders the same shared canvas in
+    /// Settings UI. Machines not present in <paramref name="receivedLayout"/> are preserved.
+    /// </summary>
+    internal static void UpdateRemoteMachineLayoutsInSettings(List<MonitorLayoutInfo> receivedLayout)
+    {
+        if (receivedLayout == null || receivedLayout.Count == 0)
+        {
+            return;
+        }
+
+        // Work on a copy so we don't mutate the backing list under another thread's lock.
+        var stored = new List<MonitorLayoutInfo>(Setting.Values.MonitorLayout ?? new List<MonitorLayoutInfo>());
+        if (stored.Count == 0)
+        {
+            // No local layout yet — accept the authoritative full layout directly.
+            var initial = receivedLayout
+                .Where(m => !string.IsNullOrWhiteSpace(m.MachineName))
+                .Select(m => new MonitorLayoutInfo
+                {
+                    MachineName = m.MachineName,
+                    MonitorId = m.MonitorId,
+                    X = m.X,
+                    Y = m.Y,
+                    Width = m.Width,
+                    Height = m.Height,
+                    IsPrimary = m.IsPrimary,
+                })
+                .ToList();
+            if (initial.Count > 0)
+            {
+                Setting.Values.MonitorLayout = initial;
+                Logger.LogDebug($"UpdateRemoteMachineLayoutsInSettings: initialized with {initial.Count} monitors from authoritative layout.");
+            }
+
+            return;
+        }
+
+        var receivedMachineNames = new HashSet<string>(
+            receivedLayout
+                .Select(m => m.MachineName)
+                .Where(name => !string.IsNullOrWhiteSpace(name)),
+            StringComparer.OrdinalIgnoreCase);
+
+        if (receivedMachineNames.Count == 0)
+        {
+            return;
+        }
+
+        var merged = receivedLayout
+            .Where(m => !string.IsNullOrWhiteSpace(m.MachineName))
+            .Select(m => new MonitorLayoutInfo
+            {
+                MachineName = m.MachineName,
+                MonitorId = m.MonitorId,
+                X = m.X,
+                Y = m.Y,
+                Width = m.Width,
+                Height = m.Height,
+                IsPrimary = m.IsPrimary,
+            })
+            .ToList();
+
+        merged.AddRange(stored.Where(m => !receivedMachineNames.Contains(m.MachineName ?? string.Empty)));
+
+        if (!SettingMonitorLayoutsEquivalent(stored, merged))
+        {
+            Setting.Values.MonitorLayout = merged;
+            Logger.LogDebug($"UpdateRemoteMachineLayoutsInSettings: updated {receivedMachineNames.Count} machine(s) from authoritative full layout.");
+        }
+    }
+
+    private static bool SettingMonitorLayoutsEquivalent(
+        List<MonitorLayoutInfo> left,
+        List<MonitorLayoutInfo> right)
+    {
+        if (ReferenceEquals(left, right))
+        {
+            return true;
+        }
+
+        if (left == null || right == null || left.Count != right.Count)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < left.Count; i++)
+        {
+            var a = left[i];
+            var b = right[i];
+
+            if (!string.Equals(a.MachineName, b.MachineName, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(a.MonitorId, b.MonitorId, StringComparison.Ordinal)
+                || a.X != b.X
+                || a.Y != b.Y
+                || a.Width != b.Width
+                || a.Height != b.Height
+                || a.IsPrimary != b.IsPrimary)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    internal static List<MonitorLayoutInfo> PatchLocalMonitorCoordinatesForTesting(
+        List<MonitorLayoutInfo> layout,
+        string localMachineName,
+        List<WinAPI.PhysicalMonitorInfo> physicalMonitors,
+        MyRectangle currentDesktopBounds)
+    {
+        return MonitorLayoutPatcher.Patch(layout, localMachineName, physicalMonitors, currentDesktopBounds);
     }
 
     internal static MyRectangle PrimaryScreenBounds => MachineStuff.primaryScreenBounds;
@@ -178,17 +350,6 @@ internal static class MachineStuff
     }
 #else
 
-    private static Point ConvertToUniversalValue(Point p, MyRectangle r)
-    {
-        if (!p.IsEmpty)
-        {
-            p.X = (p.X - r.Left) * 65535 / (r.Right - r.Left);
-            p.Y = (p.Y - r.Top) * 65535 / (r.Bottom - r.Top);
-        }
-
-        return p;
-    }
-
     /* Let's say we have 3 machines A, B, and C. A is the controller machine.
      * (x, y) is the current Mouse position in pixel.
      * If Setting.Values.MoveMouseRelatively then (x, y) can be from any machine having the value bounded by desktopBounds (can be negative)
@@ -238,21 +399,15 @@ internal static class MachineStuff
          * */
         if (desMachineID == Common.MachineID)
         {
-            if (x < desktopBounds.Left + SKIP_PIXELS)
+            string currentMachine = NameFromID(desMachineID);
+            if (currentMachine != null)
             {
-                return MoveLeft(x, y);
-            }
-            else if (x >= desktopBounds.Right - SKIP_PIXELS)
-            {
-                return MoveRight(x, y);
-            }
-            else if (y < desktopBounds.Top + SKIP_PIXELS)
-            {
-                return MoveUp(x, y);
-            }
-            else if (y >= desktopBounds.Bottom - SKIP_PIXELS)
-            {
-                return MoveDown(x, y);
+                var transition = _layoutNavigator.CheckLocalMachineEdge(x, y, currentMachine);
+                if (transition.HasValue)
+                {
+                    newDesMachineIdEx = transition.Value.TargetMachineId;
+                    return transition.Value.LandingPosition;
+                }
             }
         }
 
@@ -261,21 +416,45 @@ internal static class MachineStuff
          * */
         else
         {
-            if (x < primaryScreenBounds.Left + SKIP_PIXELS)
+            MoveDirection? dir = null;
+            if (x < primaryScreenBounds.Left + NavigationMath.SkipPixels)
             {
-                return MoveLeft(x, y);
+                dir = MoveDirection.Left;
             }
-            else if (x >= primaryScreenBounds.Right - SKIP_PIXELS)
+            else if (x >= primaryScreenBounds.Right - NavigationMath.SkipPixels)
             {
-                return MoveRight(x, y);
+                dir = MoveDirection.Right;
             }
-            else if (y < primaryScreenBounds.Top + SKIP_PIXELS)
+            else if (y < primaryScreenBounds.Top + NavigationMath.SkipPixels)
             {
-                return MoveUp(x, y);
+                dir = MoveDirection.Up;
             }
-            else if (y >= primaryScreenBounds.Bottom - SKIP_PIXELS)
+            else if (y >= primaryScreenBounds.Bottom - NavigationMath.SkipPixels)
             {
-                return MoveDown(x, y);
+                dir = MoveDirection.Down;
+            }
+
+            if (dir.HasValue)
+            {
+                // Let the active navigator try first (monitor layout performs a canvas-space
+                // lookup; device matrix returns null and we fall through to the matrix path).
+                string remoteName = NameFromID(desMachineID);
+                var remoteTransition = _layoutNavigator.TryResolveRemoteEdge(dir.Value, remoteName, x, y);
+                if (remoteTransition.HasValue)
+                {
+                    newDesMachineIdEx = remoteTransition.Value.TargetMachineId;
+                    return remoteTransition.Value.LandingPosition;
+                }
+
+                // Matrix fallback (also used when monitor layout did not resolve).
+                return dir.Value switch
+                {
+                    MoveDirection.Left => MoveLeft(x, y),
+                    MoveDirection.Right => MoveRight(x, y),
+                    MoveDirection.Up => MoveUp(x, y),
+                    MoveDirection.Down => MoveDown(x, y),
+                    _ => Point.Empty,
+                };
             }
         }
 
@@ -284,392 +463,76 @@ internal static class MachineStuff
 
 #endif
 
-    [SuppressMessage("Microsoft.Maintainability", "CA1502:AvoidExcessiveComplexity", Justification = "Dotnet port with style preservation")]
-    private static Point MoveRight(int x, int y)
+    private static Point MoveRight(int x, int y, string localMonitorId = null, int physMonitorLeft = 0, int physMonitorTop = 0)
     {
-        string[] mc = LiveMachineMatrix;
-        if (mc == null)
-        {
-            return Point.Empty;
-        }
-
-        bool oneRow = Setting.Values.MatrixOneRow;
-
         string currentMachine = NameFromID(desMachineID);
         if (currentMachine == null)
         {
             return Point.Empty;
         }
 
-        ID newID;
-        if (oneRow)
+        var t = _layoutNavigator.TryResolveLocalEdge(MoveDirection.Right, currentMachine, x, y, localMonitorId, physMonitorLeft, physMonitorTop);
+        if (!t.HasValue)
         {
-            bool found = false;
-            for (int i = 0; i < MAX_MACHINE; i++)
-            {
-                if (currentMachine.Trim().Equals(mc[i], StringComparison.OrdinalIgnoreCase))
-                {
-                    for (int j = i; j < MAX_MACHINE - 1; j++)
-                    {
-                        if (mc[j + 1] != null && mc[j + 1].Length > 0)
-                        {
-                            if ((newID = IdFromName(mc[j + 1])) > 0)
-                            {
-                                newDesMachineIdEx = newID;
-                                found = true;
-                                break;
-                            }
-                        }
-                    }
-
-                    if (!found && Setting.Values.MatrixCircle)
-                    {
-                        for (int j = 0; j < i; j++)
-                        {
-                            if (mc[j] != null && mc[j].Length > 0)
-                            {
-                                if ((newID = IdFromName(mc[j])) > 0)
-                                {
-                                    newDesMachineIdEx = newID;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-                    break;
-                }
-            }
-        }
-        else
-        {
-            if (currentMachine.Trim().Equals(mc[0], StringComparison.OrdinalIgnoreCase) && (mc[1] != null)
-                && (mc[1].Length > 0))
-            {
-                if ((newID = IdFromName(mc[1])) > 0)
-                {
-                    newDesMachineIdEx = newID;
-                }
-            }
-            else if (currentMachine.Trim().Equals(mc[2], StringComparison.OrdinalIgnoreCase) && (mc[3] != null)
-                && (mc[3].Length > 0))
-            {
-                if ((newID = IdFromName(mc[3])) > 0)
-                {
-                    newDesMachineIdEx = newID;
-                }
-            }
-            else if (Setting.Values.MatrixCircle && currentMachine.Trim().Equals(mc[1], StringComparison.OrdinalIgnoreCase) && (mc[0] != null)
-                && (mc[0].Length > 0))
-            {
-                if ((newID = IdFromName(mc[0])) > 0)
-                {
-                    newDesMachineIdEx = newID;
-                }
-            }
-            else if (Setting.Values.MatrixCircle && currentMachine.Trim().Equals(mc[3], StringComparison.OrdinalIgnoreCase) && (mc[2] != null)
-                && (mc[2].Length > 0))
-            {
-                if ((newID = IdFromName(mc[2])) > 0)
-                {
-                    newDesMachineIdEx = newID;
-                }
-            }
+            return Point.Empty;
         }
 
-        // THIS LOGIC IS THE SAME FOR Move*(int x, int y) METHODS.
-        if (newDesMachineIdEx != desMachineID)
-        {
-            Logger.LogDebug("Move Right");
-
-            if (!Setting.Values.MoveMouseRelatively)
-            {
-                if (newDesMachineIdEx == Common.MachineID)
-                {
-                    /* Switching back to the controller machine, we need to scale up to the desktopBounds from primaryScreenBounds (sine !Setting.Values.MoveMouseRelatively).
-                     * primaryScreenBounds => 65535 => desktopBounds, so that the Mouse position is mapped to the right position when the controller machine has multiple monitors.
-                     * */
-                    return ConvertToUniversalValue(new Point(primaryScreenBounds.Left + JUMP_PIXELS, y), primaryScreenBounds);
-                }
-                else
-                {
-                    if (desMachineID == Common.MachineID)
-                    {
-                        /* Switching FROM the controller machine, since Mouse was not bounded/locked to the primary screen,
-                         * Mouse position can just be mapped from desktopBounds to desktopBounds
-                         * desktopBounds => 65535 => desktopBounds.
-                         * */
-                        return ConvertToUniversalValue(new Point(desktopBounds.Left + JUMP_PIXELS, y), desktopBounds);
-                    }
-                    else
-                    {
-                        /* Switching between two machines where non of them is the controller machine.
-                         * Since the current Mouse position is "mapped" from the primary monitor of the controller machine,
-                         * new Mouse position for the new controlled machine needs to be calculated from this as well.
-                         * primaryScreenBounds => 65535 => desktopBounds
-                         * */
-                        return ConvertToUniversalValue(new Point(primaryScreenBounds.Left + JUMP_PIXELS, y), primaryScreenBounds);
-                    }
-                }
-            }
-            else
-            {
-                /* In the case where Mouse is moved relatively, Mouse position is simply mapped from desktopBounds to desktopBounds.
-                 * desktopBounds => 65535 => desktopBounds.
-                 * */
-                return ConvertToUniversalValue(new Point(desktopBounds.Left + JUMP_PIXELS, y), desktopBounds);
-            }
-        }
-
-        return Point.Empty;
+        newDesMachineIdEx = t.Value.TargetMachineId;
+        return t.Value.LandingPosition;
     }
 
-    [SuppressMessage("Microsoft.Maintainability", "CA1502:AvoidExcessiveComplexity", Justification = "Dotnet port with style preservation")]
-    private static Point MoveLeft(int x, int y)
+    private static Point MoveLeft(int x, int y, string localMonitorId = null, int physMonitorLeft = 0, int physMonitorTop = 0)
     {
-        string[] mc = LiveMachineMatrix;
-        if (mc == null)
-        {
-            return Point.Empty;
-        }
-
-        bool oneRow = Setting.Values.MatrixOneRow;
-
         string currentMachine = NameFromID(desMachineID);
         if (currentMachine == null)
         {
             return Point.Empty;
         }
 
-        ID newID;
-        if (oneRow)
+        var t = _layoutNavigator.TryResolveLocalEdge(MoveDirection.Left, currentMachine, x, y, localMonitorId, physMonitorLeft, physMonitorTop);
+        if (!t.HasValue)
         {
-            bool found = false;
-            for (int i = MAX_MACHINE - 1; i >= 0; i--)
-            {
-                if (currentMachine.Trim().Equals(mc[i], StringComparison.OrdinalIgnoreCase))
-                {
-                    for (int j = i; j > 0; j--)
-                    {
-                        if (mc[j - 1] != null && mc[j - 1].Length > 0)
-                        {
-                            if ((newID = IdFromName(mc[j - 1])) != ID.NONE)
-                            {
-                                newDesMachineIdEx = newID;
-                                found = true;
-                                break;
-                            }
-                        }
-                    }
-
-                    if (!found && Setting.Values.MatrixCircle)
-                    {
-                        for (int j = MAX_MACHINE - 1; j > i; j--)
-                        {
-                            if (mc[j] != null && mc[j].Length > 0)
-                            {
-                                if ((newID = IdFromName(mc[j])) != ID.NONE)
-                                {
-                                    newDesMachineIdEx = newID;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-                    break;
-                }
-            }
-        }
-        else
-        {
-            if (currentMachine.Trim().Equals(mc[1], StringComparison.OrdinalIgnoreCase) && (mc[0] != null)
-                && (mc[0].Length > 0))
-            {
-                if ((newID = IdFromName(mc[0])) != ID.NONE)
-                {
-                    newDesMachineIdEx = newID;
-                }
-            }
-            else if (currentMachine.Trim().Equals(mc[3], StringComparison.OrdinalIgnoreCase) && (mc[2] != null)
-                && (mc[2].Length > 0))
-            {
-                if ((newID = IdFromName(mc[2])) != ID.NONE)
-                {
-                    newDesMachineIdEx = newID;
-                }
-            }
-            else if (Setting.Values.MatrixCircle && currentMachine.Trim().Equals(mc[0], StringComparison.OrdinalIgnoreCase) && (mc[1] != null)
-                && (mc[1].Length > 0))
-            {
-                if ((newID = IdFromName(mc[1])) != ID.NONE)
-                {
-                    newDesMachineIdEx = newID;
-                }
-            }
-            else if (Setting.Values.MatrixCircle && currentMachine.Trim().Equals(mc[2], StringComparison.OrdinalIgnoreCase) && (mc[3] != null)
-                && (mc[3].Length > 0))
-            {
-                if ((newID = IdFromName(mc[3])) != ID.NONE)
-                {
-                    newDesMachineIdEx = newID;
-                }
-            }
+            return Point.Empty;
         }
 
-        if (newDesMachineIdEx != desMachineID)
-        {
-            Logger.LogDebug("Move Left");
-
-            return !Setting.Values.MoveMouseRelatively
-                ? newDesMachineIdEx == Common.MachineID
-                    ? ConvertToUniversalValue(new Point(primaryScreenBounds.Right - JUMP_PIXELS, y), primaryScreenBounds)
-                    : desMachineID == Common.MachineID
-                        ? ConvertToUniversalValue(new Point(desktopBounds.Right - JUMP_PIXELS, y), desktopBounds)
-                        : ConvertToUniversalValue(new Point(primaryScreenBounds.Right - JUMP_PIXELS, y), primaryScreenBounds)
-                : ConvertToUniversalValue(new Point(desktopBounds.Right - JUMP_PIXELS, y), desktopBounds);
-        }
-
-        return Point.Empty;
+        newDesMachineIdEx = t.Value.TargetMachineId;
+        return t.Value.LandingPosition;
     }
 
-    private static Point MoveUp(int x, int y)
+    private static Point MoveUp(int x, int y, string localMonitorId = null, int physMonitorLeft = 0, int physMonitorTop = 0)
     {
-        if (Setting.Values.MatrixOneRow)
-        {
-            return Point.Empty;
-        }
-
-        string[] mc = LiveMachineMatrix;
-        if (mc == null)
-        {
-            return Point.Empty;
-        }
-
         string currentMachine = NameFromID(desMachineID);
         if (currentMachine == null)
         {
             return Point.Empty;
         }
 
-        ID newID;
-        if (currentMachine.Trim().Equals(mc[2], StringComparison.OrdinalIgnoreCase) && (mc[0] != null)
-            && (mc[0].Length > 0))
+        var t = _layoutNavigator.TryResolveLocalEdge(MoveDirection.Up, currentMachine, x, y, localMonitorId, physMonitorLeft, physMonitorTop);
+        if (!t.HasValue)
         {
-            if ((newID = IdFromName(mc[0])) != ID.NONE)
-            {
-                newDesMachineIdEx = newID;
-            }
-        }
-        else if (currentMachine.Trim().Equals(mc[3], StringComparison.OrdinalIgnoreCase) && (mc[1] != null)
-            && (mc[1].Length > 0))
-        {
-            if ((newID = IdFromName(mc[1])) != ID.NONE)
-            {
-                newDesMachineIdEx = newID;
-            }
-        }
-        else if (Setting.Values.MatrixCircle && currentMachine.Trim().Equals(mc[0], StringComparison.OrdinalIgnoreCase) && (mc[2] != null)
-            && (mc[2].Length > 0))
-        {
-            if ((newID = IdFromName(mc[2])) != ID.NONE)
-            {
-                newDesMachineIdEx = newID;
-            }
-        }
-        else if (Setting.Values.MatrixCircle && currentMachine.Trim().Equals(mc[1], StringComparison.OrdinalIgnoreCase) && (mc[3] != null)
-            && (mc[3].Length > 0))
-        {
-            if ((newID = IdFromName(mc[3])) != ID.NONE)
-            {
-                newDesMachineIdEx = newID;
-            }
+            return Point.Empty;
         }
 
-        if (newDesMachineIdEx != desMachineID)
-        {
-            Logger.LogDebug("Move Up");
-
-            return !Setting.Values.MoveMouseRelatively
-                ? newDesMachineIdEx == Common.MachineID
-                    ? ConvertToUniversalValue(new Point(x, primaryScreenBounds.Bottom - JUMP_PIXELS), primaryScreenBounds)
-                    : desMachineID == Common.MachineID
-                        ? ConvertToUniversalValue(new Point(x, desktopBounds.Bottom - JUMP_PIXELS), desktopBounds)
-                        : ConvertToUniversalValue(new Point(x, primaryScreenBounds.Bottom - JUMP_PIXELS), primaryScreenBounds)
-                : ConvertToUniversalValue(new Point(x, desktopBounds.Bottom - JUMP_PIXELS), desktopBounds);
-        }
-
-        return Point.Empty;
+        newDesMachineIdEx = t.Value.TargetMachineId;
+        return t.Value.LandingPosition;
     }
 
-    private static Point MoveDown(int x, int y)
+    private static Point MoveDown(int x, int y, string localMonitorId = null, int physMonitorLeft = 0, int physMonitorTop = 0)
     {
-        if (Setting.Values.MatrixOneRow)
-        {
-            return Point.Empty;
-        }
-
-        string[] mc = LiveMachineMatrix;
-        if (mc == null)
-        {
-            return Point.Empty;
-        }
-
         string currentMachine = NameFromID(desMachineID);
         if (currentMachine == null)
         {
             return Point.Empty;
         }
 
-        ID newID;
-        if (currentMachine.Trim().Equals(mc[0], StringComparison.OrdinalIgnoreCase) && (mc[2] != null)
-            && (mc[2].Length > 0))
+        var t = _layoutNavigator.TryResolveLocalEdge(MoveDirection.Down, currentMachine, x, y, localMonitorId, physMonitorLeft, physMonitorTop);
+        if (!t.HasValue)
         {
-            if ((newID = IdFromName(mc[2])) != ID.NONE)
-            {
-                newDesMachineIdEx = newID;
-            }
-        }
-        else if (currentMachine.Trim().Equals(mc[1], StringComparison.OrdinalIgnoreCase) && (mc[3] != null)
-            && (mc[3].Length > 0))
-        {
-            if ((newID = IdFromName(mc[3])) != ID.NONE)
-            {
-                newDesMachineIdEx = newID;
-            }
+            return Point.Empty;
         }
 
-        if (Setting.Values.MatrixCircle && currentMachine.Trim().Equals(mc[2], StringComparison.OrdinalIgnoreCase) && (mc[0] != null)
-            && (mc[0].Length > 0))
-        {
-            if ((newID = IdFromName(mc[0])) != ID.NONE)
-            {
-                newDesMachineIdEx = newID;
-            }
-        }
-        else if (Setting.Values.MatrixCircle && currentMachine.Trim().Equals(mc[3], StringComparison.OrdinalIgnoreCase) && (mc[1] != null)
-            && (mc[1].Length > 0))
-        {
-            if ((newID = IdFromName(mc[1])) != ID.NONE)
-            {
-                newDesMachineIdEx = newID;
-            }
-        }
-
-        if (newDesMachineIdEx != desMachineID)
-        {
-            Logger.LogDebug("Move Down");
-
-            return !Setting.Values.MoveMouseRelatively
-                ? newDesMachineIdEx == Common.MachineID
-                    ? ConvertToUniversalValue(new Point(x, primaryScreenBounds.Top + JUMP_PIXELS), primaryScreenBounds)
-                    : desMachineID == Common.MachineID
-                        ? ConvertToUniversalValue(new Point(x, desktopBounds.Top + JUMP_PIXELS), desktopBounds)
-                        : ConvertToUniversalValue(new Point(x, primaryScreenBounds.Top + JUMP_PIXELS), primaryScreenBounds)
-                : ConvertToUniversalValue(new Point(x, desktopBounds.Top + JUMP_PIXELS), desktopBounds);
-        }
-
-        return Point.Empty;
+        newDesMachineIdEx = t.Value.TargetMachineId;
+        return t.Value.LandingPosition;
     }
 
     internal static bool RemoveDeadMachines(ID ip)
@@ -782,102 +645,6 @@ internal static class MachineStuff
         Common.Sk?.UpdateTCPClients();
     }
 
-    private static SettingsForm settings;
-
-    internal static SettingsForm Settings
-    {
-        get => MachineStuff.settings;
-        set => MachineStuff.settings = value;
-    }
-
-    internal static void ShowSetupForm(bool reopenSockets = false)
-    {
-        Logger.LogDebug("========== BEGIN THE SETUP EXPERIENCE ==========", true);
-        Setting.Values.MyKey = Encryption.MyKey = Encryption.CreateRandomKey();
-        Encryption.GeneratedKey = true;
-
-        if (Process.GetCurrentProcess().SessionId != NativeMethods.WTSGetActiveConsoleSessionId())
-        {
-            Logger.Log("Not physical console session.");
-            _ = MessageBox.Show(
-                "Please run the program in the physical console session.\r\nThe program does not work in a remote desktop or virtual machine session.",
-                Application.ProductName,
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Stop);
-            return;
-        }
-
-        if (settings == null)
-        {
-            settings = new SettingsForm();
-            settings.Show();
-        }
-        else
-        {
-            settings.Close();
-            Common.MMSleep(0.3);
-            settings = new SettingsForm();
-            settings.Show();
-        }
-
-        if (reopenSockets)
-        {
-            Common.ReopenSockets(true);
-        }
-    }
-
-    internal static void CloseSetupForm()
-    {
-        if (settings != null)
-        {
-            settings.Close();
-            settings = null;
-        }
-    }
-
-    internal static void ShowMachineMatrix()
-    {
-        if (!Setting.Values.ShowOriginalUI)
-        {
-            return;
-        }
-
-        if (Process.GetCurrentProcess().SessionId != NativeMethods.WTSGetActiveConsoleSessionId())
-        {
-            Common.ShowToolTip(Application.ProductName + " cannot be used in a remote desktop or virtual machine session.", 5000);
-        }
-
-#if NEW_SETTINGS_FORM
-        Common.ShowSetupForm();
-#else
-        if (Setting.Values.FirstRun && !Common.AtLeastOneSocketConnected())
-        {
-            MachineStuff.ShowSetupForm();
-        }
-        else
-        {
-            PowerToysTelemetry.Log.WriteEvent(new MouseWithoutBorders.Telemetry.MouseWithoutBordersOldUIOpenedEvent());
-
-            if (Common.MatrixForm == null)
-            {
-                Common.MatrixForm = new FrmMatrix();
-                Common.MatrixForm.Show();
-
-                if (Common.MainForm != null)
-                {
-                    Common.MainForm.NotifyIcon.Visible = false;
-                    Common.MainForm.NotifyIcon.Visible = Setting.Values.ShowOriginalUI;
-                }
-            }
-            else
-            {
-                Common.MatrixForm.WindowState = FormWindowState.Normal;
-                Common.MatrixForm.Activate();
-            }
-        }
-#endif
-    }
-
     private static string[] mcMatrix;
 
     internal static string[] MachineMatrix
@@ -932,11 +699,11 @@ internal static class MachineStuff
         }
     }
 
-    private static string[] LiveMachineMatrix
+    internal static string[] LiveMachineMatrix
     {
         get
         {
-            bool twoRow = !Setting.Values.MatrixOneRow;
+            bool twoRow = Setting.IsMonitorLayoutEnabled || !Setting.Values.MatrixOneRow;
             string[] connectedMachines = twoRow ? MachineMatrix : MachineMatrix.Select(m => Common.IsConnectedTo(IdFromName(m)) ? m : string.Empty).ToArray();
             Logger.LogDebug($"Matrix: {string.Join(",", MachineMatrix)}, Connected: {string.Join(",", connectedMachines)}");
 
@@ -989,7 +756,14 @@ internal static class MachineStuff
             if (i == MAX_MACHINE)
             {
                 Setting.Values.MatrixCircle = (package.Type & PackageType.MatrixSwapFlag) == PackageType.MatrixSwapFlag;
-                Setting.Values.MatrixOneRow = !((package.Type & PackageType.MatrixTwoRowFlag) == PackageType.MatrixTwoRowFlag);
+
+                // When monitor layout routing is active, MatrixOneRow is irrelevant. Ignore the
+                // synced value so the user's stored preference is not silently overwritten.
+                if (!Setting.IsMonitorLayoutEnabled)
+                {
+                    Setting.Values.MatrixOneRow = !((package.Type & PackageType.MatrixTwoRowFlag) == PackageType.MatrixTwoRowFlag);
+                }
+
                 MachineMatrix = MachineMatrix; // Save
 
                 InitAndCleanup.ReopenSocketDueToReadError = true;
@@ -1047,34 +821,6 @@ internal static class MachineStuff
         InitAndCleanup.ReleaseAllKeys();
 
         Common.UpdateMultipleModeIconAndMenu();
-    }
-
-    internal static bool CheckSecondInstance(bool sendMessage = false)
-    {
-        int h;
-
-        if ((h = NativeMethods.FindWindow(null, Setting.Values.MyID)) > 0)
-        {
-            return true;
-        }
-
-        return false;
-    }
-
-#pragma warning disable SA1307 // Accessible fields should begin with upper-case letter
-    internal static EventWaitHandle oneInstanceCheck;
-#pragma warning restore SA1307
-
-    internal static void AssertOneInstancePerDesktopSession()
-    {
-        string eventName = $"Global\\{Application.ProductName}-{FrmAbout.AssemblyVersion}-{WinAPI.GetMyDesktop()}-{Common.CurrentProcess.SessionId}";
-        oneInstanceCheck = new EventWaitHandle(false, EventResetMode.ManualReset, eventName, out bool created);
-
-        if (!created)
-        {
-            Logger.TelemetryLogTrace($"Second instance found: {eventName}.", SeverityLevel.Warning, true);
-            Common.CurrentProcess.KillProcess(true);
-        }
     }
 
     internal static ID IdFromName(string name)

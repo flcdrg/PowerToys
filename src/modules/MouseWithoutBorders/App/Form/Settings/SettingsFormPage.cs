@@ -1,4 +1,4 @@
-﻿// Copyright (c) Microsoft Corporation
+// Copyright (c) Microsoft Corporation
 // The Microsoft Corporation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
@@ -60,8 +60,8 @@ namespace MouseWithoutBorders
                 MessageBoxDefaultButton.Button2) == DialogResult.Yes)
             {
                 Setting.Values.FirstRun = false;
-                MachineStuff.CloseSetupForm();
-                MachineStuff.ShowMachineMatrix();
+                SetupFormManager.CloseSetupForm();
+                SetupFormManager.ShowMachineMatrix();
             }
         }
     }

@@ -31,7 +31,7 @@ namespace Microsoft.PowerToys.Settings.UI.Library
         {
             Name = ModuleName;
             Properties = new MouseWithoutBordersProperties();
-            Version = "1.1";
+            Version = "1.2";
         }
 
         public string GetModuleName()
@@ -89,6 +89,8 @@ namespace Microsoft.PowerToys.Settings.UI.Library
                 Properties.HotKeyReconnect != null ||
                 Properties.HotKeySwitch2AllPC != null);
 
+            bool upgraded = false;
+
             if (Version == "1.0" || downgradedThenUpgraded)
             {
                 Version = "1.1";
@@ -118,10 +120,18 @@ namespace Microsoft.PowerToys.Settings.UI.Library
                 Properties.HotKeyReconnect = null;
                 Properties.HotKeySwitch2AllPC = null;
 
-                return true;
+                upgraded = true;
             }
 
-            return false;
+            if (Version == "1.1")
+            {
+                // No data migration needed for 1.1 -> 1.2; new properties (UseMonitorLayout,
+                // MonitorLayout) default to false/null which is the correct fallback behavior.
+                Version = "1.2";
+                upgraded = true;
+            }
+
+            return upgraded;
 #pragma warning restore CS0618
         }
 

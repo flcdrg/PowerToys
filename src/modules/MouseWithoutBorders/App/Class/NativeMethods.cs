@@ -279,7 +279,7 @@ namespace MouseWithoutBorders.Class
             EnumMonitorsDelegate lpfnEnum,
             IntPtr dwData);
 
-        [DllImport("user32.dll")]
+        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         internal static extern bool GetMonitorInfo(IntPtr hMonitor, ref MonitorInfoEx lpmi);
 
@@ -508,8 +508,8 @@ namespace MouseWithoutBorders.Class
             internal RECT rcWork;
             internal uint dwFlags;
 
-            // [MarshalAs(UnmanagedType.ByValTStr, SizeConst = CCHDEVICENAME)]
-            // internal string szDeviceName;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = CCHDEVICENAME)]
+            internal string szDeviceName;
         }
 
         // We are WOW

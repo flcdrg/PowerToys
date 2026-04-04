@@ -138,6 +138,7 @@ internal static class InitAndCleanup
         NetworkChange.NetworkAvailabilityChanged += new NetworkAvailabilityChangedEventHandler(NetworkChange_NetworkAvailabilityChanged);
         SystemEvents.PowerModeChanged += new PowerModeChangedEventHandler(SystemEvents_PowerModeChanged);
         PleaseReopenSocket = 9;
+        MachineStuff.RebuildMonitorLayout();
         /* TODO: Telemetry for the matrix? */
     }
 
