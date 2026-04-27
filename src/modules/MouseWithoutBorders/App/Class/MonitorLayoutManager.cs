@@ -36,6 +36,13 @@ namespace MouseWithoutBorders.Class
         internal int UpGap = int.MaxValue;
         internal int DownGap = int.MaxValue;
 
+        // Perpendicular overlap for each direction; used as a tiebreaker when gaps are equal
+        // so that a wide shared edge beats a corner-pixel touch.
+        internal int LeftOverlap = 0;
+        internal int RightOverlap = 0;
+        internal int UpOverlap = 0;
+        internal int DownOverlap = 0;
+
         public AdjacentMonitors()
         {
         }
@@ -433,37 +440,41 @@ namespace MouseWithoutBorders.Class
             bool sharedVertical = a.Y < b.Y + b.Height && b.Y < a.Y + a.Height;
             bool sharedHorizontal = a.X < b.X + b.Width && b.X < a.X + a.Width;
 
+            // Perpendicular overlap used as a tiebreaker when multiple candidates share the same gap.
+            int hOverlap = Math.Max(0, Math.Min(a.X + a.Width, b.X + b.Width) - Math.Max(a.X, b.X));
+            int vOverlap = Math.Max(0, Math.Min(a.Y + a.Height, b.Y + b.Height) - Math.Max(a.Y, b.Y));
+
             int gap;
 
             gap = Math.Abs((a.X + a.Width) - b.X);
             if (sharedVertical && gap <= AdjacencyTolerance)
             {
-                SetAdjacent(adjacency, a, b, MoveDirection.Right, gap);
-                SetAdjacent(adjacency, b, a, MoveDirection.Left, gap);
+                SetAdjacent(adjacency, a, b, MoveDirection.Right, gap, vOverlap);
+                SetAdjacent(adjacency, b, a, MoveDirection.Left, gap, vOverlap);
                 return;
             }
 
             gap = Math.Abs((b.X + b.Width) - a.X);
             if (sharedVertical && gap <= AdjacencyTolerance)
             {
-                SetAdjacent(adjacency, b, a, MoveDirection.Right, gap);
-                SetAdjacent(adjacency, a, b, MoveDirection.Left, gap);
+                SetAdjacent(adjacency, b, a, MoveDirection.Right, gap, vOverlap);
+                SetAdjacent(adjacency, a, b, MoveDirection.Left, gap, vOverlap);
                 return;
             }
 
             gap = Math.Abs((a.Y + a.Height) - b.Y);
             if (sharedHorizontal && gap <= AdjacencyTolerance)
             {
-                SetAdjacent(adjacency, a, b, MoveDirection.Down, gap);
-                SetAdjacent(adjacency, b, a, MoveDirection.Up, gap);
+                SetAdjacent(adjacency, a, b, MoveDirection.Down, gap, hOverlap);
+                SetAdjacent(adjacency, b, a, MoveDirection.Up, gap, hOverlap);
                 return;
             }
 
             gap = Math.Abs((b.Y + b.Height) - a.Y);
             if (sharedHorizontal && gap <= AdjacencyTolerance)
             {
-                SetAdjacent(adjacency, b, a, MoveDirection.Down, gap);
-                SetAdjacent(adjacency, a, b, MoveDirection.Up, gap);
+                SetAdjacent(adjacency, b, a, MoveDirection.Down, gap, hOverlap);
+                SetAdjacent(adjacency, a, b, MoveDirection.Up, gap, hOverlap);
             }
         }
 
@@ -485,29 +496,39 @@ namespace MouseWithoutBorders.Class
             int aDownGap = b.Y - (a.Y + a.Height);    // b is below a
             int bDownGap = a.Y - (b.Y + b.Height);    // a is below b (b is above a)
 
-            // Pick the direction with the smallest non-negative gap.
+            // Require perpendicular overlap for each direction, matching the cross-machine
+            // logic. Without this, monitors that merely touch at a corner (zero overlap in
+            // the perpendicular axis) would be linked, which produces wrong transitions —
+            // e.g. a wide top monitor getting linked Down to a narrow bottom monitor that
+            // shares only a pixel at the corner, beating out a cross-machine neighbor that
+            // has substantial horizontal overlap.
+            int xOverlap = Math.Max(0, Math.Min(a.X + a.Width, b.X + b.Width) - Math.Max(a.X, b.X));
+            int yOverlap = Math.Max(0, Math.Min(a.Y + a.Height, b.Y + b.Height) - Math.Max(a.Y, b.Y));
+
+            // Pick the direction with the smallest non-negative gap where the perpendicular
+            // strip is non-empty (at least 1 pixel of shared edge).
             int minGap = int.MaxValue;
             int bestDir = -1;
 
-            if (aRightGap >= 0 && aRightGap < minGap)
+            if (aRightGap >= 0 && aRightGap < minGap && yOverlap > 0)
             {
                 minGap = aRightGap;
                 bestDir = 0;
             }
 
-            if (bRightGap >= 0 && bRightGap < minGap)
+            if (bRightGap >= 0 && bRightGap < minGap && yOverlap > 0)
             {
                 minGap = bRightGap;
                 bestDir = 1;
             }
 
-            if (aDownGap >= 0 && aDownGap < minGap)
+            if (aDownGap >= 0 && aDownGap < minGap && xOverlap > 0)
             {
                 minGap = aDownGap;
                 bestDir = 2;
             }
 
-            if (bDownGap >= 0 && bDownGap < minGap)
+            if (bDownGap >= 0 && bDownGap < minGap && xOverlap > 0)
             {
                 minGap = bDownGap;
                 bestDir = 3;
@@ -516,20 +537,20 @@ namespace MouseWithoutBorders.Class
             switch (bestDir)
             {
                 case 0: // b is to the right of a
-                    SetAdjacent(adjacency, a, b, MoveDirection.Right, minGap);
-                    SetAdjacent(adjacency, b, a, MoveDirection.Left, minGap);
+                    SetAdjacent(adjacency, a, b, MoveDirection.Right, minGap, yOverlap);
+                    SetAdjacent(adjacency, b, a, MoveDirection.Left, minGap, yOverlap);
                     break;
                 case 1: // a is to the right of b
-                    SetAdjacent(adjacency, b, a, MoveDirection.Right, minGap);
-                    SetAdjacent(adjacency, a, b, MoveDirection.Left, minGap);
+                    SetAdjacent(adjacency, b, a, MoveDirection.Right, minGap, yOverlap);
+                    SetAdjacent(adjacency, a, b, MoveDirection.Left, minGap, yOverlap);
                     break;
                 case 2: // b is below a
-                    SetAdjacent(adjacency, a, b, MoveDirection.Down, minGap);
-                    SetAdjacent(adjacency, b, a, MoveDirection.Up, minGap);
+                    SetAdjacent(adjacency, a, b, MoveDirection.Down, minGap, xOverlap);
+                    SetAdjacent(adjacency, b, a, MoveDirection.Up, minGap, xOverlap);
                     break;
                 case 3: // a is below b
-                    SetAdjacent(adjacency, b, a, MoveDirection.Down, minGap);
-                    SetAdjacent(adjacency, a, b, MoveDirection.Up, minGap);
+                    SetAdjacent(adjacency, b, a, MoveDirection.Down, minGap, xOverlap);
+                    SetAdjacent(adjacency, a, b, MoveDirection.Up, minGap, xOverlap);
                     break;
                 default:
                     // All gaps are negative: monitors overlap in all directions; skip.
@@ -542,41 +563,46 @@ namespace MouseWithoutBorders.Class
             MonitorLayoutInfo from,
             MonitorLayoutInfo to,
             MoveDirection direction,
-            int gap)
+            int gap,
+            int overlap = 0)
         {
             string key = MonitorKey(from);
             var entry = adjacency[key];
             switch (direction)
             {
                 case MoveDirection.Left:
-                    if (gap < entry.LeftGap)
+                    if (gap < entry.LeftGap || (gap == entry.LeftGap && overlap > entry.LeftOverlap))
                     {
                         entry.Left = to;
                         entry.LeftGap = gap;
+                        entry.LeftOverlap = overlap;
                     }
 
                     break;
                 case MoveDirection.Right:
-                    if (gap < entry.RightGap)
+                    if (gap < entry.RightGap || (gap == entry.RightGap && overlap > entry.RightOverlap))
                     {
                         entry.Right = to;
                         entry.RightGap = gap;
+                        entry.RightOverlap = overlap;
                     }
 
                     break;
                 case MoveDirection.Up:
-                    if (gap < entry.UpGap)
+                    if (gap < entry.UpGap || (gap == entry.UpGap && overlap > entry.UpOverlap))
                     {
                         entry.Up = to;
                         entry.UpGap = gap;
+                        entry.UpOverlap = overlap;
                     }
 
                     break;
                 case MoveDirection.Down:
-                    if (gap < entry.DownGap)
+                    if (gap < entry.DownGap || (gap == entry.DownGap && overlap > entry.DownOverlap))
                     {
                         entry.Down = to;
                         entry.DownGap = gap;
+                        entry.DownOverlap = overlap;
                     }
 
                     break;

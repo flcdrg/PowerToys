@@ -307,8 +307,8 @@ namespace MouseWithoutBorders.Core
             WinAPI.PhysicalMonitorInfo? srcPhys)
         {
             var targetBounds = Manager.GetMachineBounds(result.TargetMachine);
-            int targetWidth = targetBounds != null ? targetBounds.Right - targetBounds.Left : 0;
-            int targetHeight = targetBounds != null ? targetBounds.Bottom - targetBounds.Top : 0;
+            int targetMachineWidth = targetBounds != null ? Math.Max(1, targetBounds.Right - targetBounds.Left) : 1;
+            int targetMachineHeight = targetBounds != null ? Math.Max(1, targetBounds.Bottom - targetBounds.Top) : 1;
 
             Point pt;
             switch (direction)
@@ -316,8 +316,8 @@ namespace MouseWithoutBorders.Core
                 case MoveDirection.Right:
                 {
                     double relY = ProportionalPosition(physY, srcPhys?.Top, srcPhys?.Bottom, result.CanvasCursorY, result.SrcCanvasY, result.SrcCanvasHeight);
-                    int landingX = targetWidth > 0 ? NavigationMath.JumpPixels * 65535 / targetWidth : 0;
-                    int landingY = Math.Clamp((int)(relY * 65535), 0, 65535);
+                    int landingX = MapToTargetMonitorUniversal(NavigationMath.JumpPixels, result.TargetCanvasX, result.TargetCanvasWidth, targetBounds?.Left ?? 0, targetMachineWidth, isNearFar: false);
+                    int landingY = MapToTargetMonitorUniversal(relY, result.TargetCanvasY, result.TargetCanvasHeight, targetBounds?.Top ?? 0, targetMachineHeight);
                     pt = new Point(landingX, landingY);
                     Logger.LogDebug($"  Right remote landing: relY={relY:F3} universal=({pt.X},{pt.Y})");
                     return pt;
@@ -326,8 +326,8 @@ namespace MouseWithoutBorders.Core
                 case MoveDirection.Left:
                 {
                     double relY = ProportionalPosition(physY, srcPhys?.Top, srcPhys?.Bottom, result.CanvasCursorY, result.SrcCanvasY, result.SrcCanvasHeight);
-                    int landingX = targetWidth > 0 ? (targetWidth - NavigationMath.JumpPixels) * 65535 / targetWidth : 65535;
-                    int landingY = Math.Clamp((int)(relY * 65535), 0, 65535);
+                    int landingX = MapToTargetMonitorUniversal(NavigationMath.JumpPixels, result.TargetCanvasX, result.TargetCanvasWidth, targetBounds?.Left ?? 0, targetMachineWidth, isNearFar: true);
+                    int landingY = MapToTargetMonitorUniversal(relY, result.TargetCanvasY, result.TargetCanvasHeight, targetBounds?.Top ?? 0, targetMachineHeight);
                     pt = new Point(landingX, landingY);
                     Logger.LogDebug($"  Left remote landing: relY={relY:F3} universal=({pt.X},{pt.Y})");
                     return pt;
@@ -336,8 +336,8 @@ namespace MouseWithoutBorders.Core
                 case MoveDirection.Up:
                 {
                     double relX = ProportionalPosition(physX, srcPhys?.Left, srcPhys?.Right, result.CanvasCursorX, result.SrcCanvasX, result.SrcCanvasWidth);
-                    int landingX = Math.Clamp((int)(relX * 65535), 0, 65535);
-                    int landingY = targetHeight > 0 ? (targetHeight - NavigationMath.JumpPixels) * 65535 / targetHeight : 65535;
+                    int landingX = MapToTargetMonitorUniversal(relX, result.TargetCanvasX, result.TargetCanvasWidth, targetBounds?.Left ?? 0, targetMachineWidth);
+                    int landingY = MapToTargetMonitorUniversal(NavigationMath.JumpPixels, result.TargetCanvasY, result.TargetCanvasHeight, targetBounds?.Top ?? 0, targetMachineHeight, isNearFar: true);
                     pt = new Point(landingX, landingY);
                     Logger.LogDebug($"  Up remote landing: relX={relX:F3} universal=({pt.X},{pt.Y})");
                     return pt;
@@ -346,8 +346,8 @@ namespace MouseWithoutBorders.Core
                 case MoveDirection.Down:
                 {
                     double relX = ProportionalPosition(physX, srcPhys?.Left, srcPhys?.Right, result.CanvasCursorX, result.SrcCanvasX, result.SrcCanvasWidth);
-                    int landingX = Math.Clamp((int)(relX * 65535), 0, 65535);
-                    int landingY = targetHeight > 0 ? NavigationMath.JumpPixels * 65535 / targetHeight : 0;
+                    int landingX = MapToTargetMonitorUniversal(relX, result.TargetCanvasX, result.TargetCanvasWidth, targetBounds?.Left ?? 0, targetMachineWidth);
+                    int landingY = MapToTargetMonitorUniversal(NavigationMath.JumpPixels, result.TargetCanvasY, result.TargetCanvasHeight, targetBounds?.Top ?? 0, targetMachineHeight, isNearFar: false);
                     pt = new Point(landingX, landingY);
                     Logger.LogDebug($"  Down remote landing: relX={relX:F3} universal=({pt.X},{pt.Y})");
                     return pt;
@@ -356,6 +356,45 @@ namespace MouseWithoutBorders.Core
                 default:
                     return Point.Empty;
             }
+        }
+
+        /// <summary>
+        /// Maps a proportional position (0.0–1.0) within a target monitor to the 0–65535
+        /// universal coordinate space of the target machine's full virtual desktop.
+        /// This ensures cursor at fraction <paramref name="rel"/> of the source monitor
+        /// lands at the same fraction of the target monitor rather than the target machine's
+        /// entire virtual desktop.
+        /// </summary>
+        /// <param name="rel">Fractional position within the target monitor (0.0–1.0).</param>
+        /// <param name="monitorOrigin">Canvas X or Y of the target monitor.</param>
+        /// <param name="monitorSize">Canvas width or height of the target monitor.</param>
+        /// <param name="machineOrigin">Canvas X or Y of the target machine's bounding box.</param>
+        /// <param name="machineSize">Total canvas width or height of the target machine.</param>
+        private static int MapToTargetMonitorUniversal(double rel, int monitorOrigin, int monitorSize, int machineOrigin, int machineSize)
+        {
+            if (monitorSize <= 0 || machineSize <= 0)
+            {
+                return Math.Clamp((int)(rel * 65535), 0, 65535);
+            }
+
+            double monitorStartFrac = (double)(monitorOrigin - machineOrigin) / machineSize;
+            double landingFrac = monitorStartFrac + (rel * monitorSize / machineSize);
+            return Math.Clamp((int)(landingFrac * 65535), 0, 65535);
+        }
+
+        /// <summary>
+        /// Overload for fixed pixel offsets from the near or far edge of the target monitor
+        /// (e.g. <see cref="NavigationMath.JumpPixels"/> inside the entry edge).
+        /// </summary>
+        /// <param name="jumpPixels">Pixel offset from the entry edge.</param>
+        /// <param name="isNearFar"><c>false</c> = near edge (e.g. entering from the left/top);
+        /// <c>true</c> = far edge (entering from the right/bottom).</param>
+        private static int MapToTargetMonitorUniversal(int jumpPixels, int monitorOrigin, int monitorSize, int machineOrigin, int machineSize, bool isNearFar = false)
+        {
+            double rel = isNearFar
+                ? (double)(monitorSize - jumpPixels) / monitorSize
+                : (double)jumpPixels / monitorSize;
+            return MapToTargetMonitorUniversal(rel, monitorOrigin, monitorSize, machineOrigin, machineSize);
         }
 
         /// <summary>

@@ -652,6 +652,85 @@ public sealed class MonitorLayoutManagerTests
     }
 
     [TestMethod]
+    public void SameMachine_ZeroPerpendicularOverlap_DoesNotBlockCrossMachineNeighbor()
+    {
+        // Regression: AU001 layout where DISPLAY3 (x=368..4207) has zero horizontal overlap
+        // with same-machine DISPLAY1 (x=-1554..365), but overlaps 1919px with cross-machine
+        // DELPHINIUM (x=1466..3385). Without the perpendicular-overlap guard, same-machine
+        // DISPLAY1 was set as DISPLAY3's Down neighbor first (iteration order), preventing
+        // cross-machine DELPHINIUM from being linked even though DELPHINIUM is the correct
+        // neighbor. With the fix, DISPLAY3 Down must resolve to DELPHINIUM.
+        var layout = new List<MonitorLayoutInfo>
+        {
+            Mon("AU001", "DISPLAY2", -3472, -4560, 3840, 2160),
+            Mon("AU001", "DISPLAY1", -1554, -2400, 1920, 1200),
+            Mon("AU001", "DISPLAY3",   368, -4560, 3840, 2160),
+            Mon("AU001", "DISPLAY4",  4208, -4560, 2560, 1440),
+            Mon("DELPHINIUM", "DELPHINIUM-0", 1466, -2400, 1920, 1080),
+        };
+        var mgr = BuildManager(layout);
+
+        var d3Down = mgr.ResolveEdgeTransitionByMonitorId("AU001", "DISPLAY3", MoveDirection.Down);
+        var d2Down = mgr.ResolveEdgeTransitionByMonitorId("AU001", "DISPLAY2", MoveDirection.Down);
+        var delphUp = mgr.ResolveEdgeTransitionByMonitorId("DELPHINIUM", "DELPHINIUM-0", MoveDirection.Up);
+
+        Assert.IsTrue(d3Down.IsResolved, "DISPLAY3 should have a Down neighbor");
+        Assert.AreEqual("DELPHINIUM", d3Down.TargetMachine, "DISPLAY3 Down should be cross-machine DELPHINIUM, not same-machine DISPLAY1");
+        Assert.AreEqual("DELPHINIUM-0", d3Down.TargetMonitorId);
+
+        Assert.IsTrue(d2Down.IsResolved, "DISPLAY2 Down should resolve to DISPLAY1 (they share 1920px horizontal strip)");
+        Assert.AreEqual("AU001", d2Down.TargetMachine);
+        Assert.AreEqual("DISPLAY1", d2Down.TargetMonitorId);
+
+        Assert.IsTrue(delphUp.IsResolved, "DELPHINIUM Up should resolve to DISPLAY3");
+        Assert.AreEqual("AU001", delphUp.TargetMachine);
+        Assert.AreEqual("DISPLAY3", delphUp.TargetMonitorId);
+    }
+
+    [TestMethod]
+    public void CrossMachine_LargerOverlapWinsOnTiedGap()
+    {
+        // Regression: DELPHINIUM at x=366 has a 2px horizontal overlap with DISPLAY2
+        // (right edge=368) AND a 3454px overlap with DISPLAY3 (left edge=368). Both are
+        // gap=0 above DELPHINIUM. Without overlap tiebreaking, DISPLAY2 wins because it
+        // is processed first in iteration order. With the fix, DISPLAY3 wins (larger overlap).
+        var layout = new List<MonitorLayoutInfo>
+        {
+            Mon("AU001", "DISPLAY2", -3472, -4560, 3840, 2160), // right edge x=368
+            Mon("AU001", "DISPLAY3",   368, -4560, 3840, 2160), // left edge x=368
+            Mon("DELPHINIUM", "DELPHINIUM-0", 366, -2400, 1920, 1080), // 2px overlap with DISPLAY2, 1918px with DISPLAY3
+        };
+        var mgr = BuildManager(layout);
+
+        var up = mgr.ResolveEdgeTransitionByMonitorId("DELPHINIUM", "DELPHINIUM-0", MoveDirection.Up);
+
+        Assert.IsTrue(up.IsResolved, "DELPHINIUM should have an Up neighbor");
+        Assert.AreEqual("AU001", up.TargetMachine);
+        Assert.AreEqual("DISPLAY3", up.TargetMonitorId, "DISPLAY3 has much more overlap than DISPLAY2 and should win the tiebreak");
+    }
+
+    [TestMethod]
+    public void SameMachine_CornerTouchOnly_DoesNotCreateVerticalAdjacency()
+    {
+        // Two same-machine monitors that share only a corner (zero horizontal overlap
+        // for vertical adjacency) should not be linked vertically. This prevents the
+        // wrong same-machine link from shadowing a cross-machine neighbor with real overlap.
+        var layout = new List<MonitorLayoutInfo>
+        {
+            Mon("PC1", "LEFT",  0, 0, 100, 100),   // right edge x=100, bottom y=100
+            Mon("PC1", "RIGHT", 100, 100, 100, 100), // left edge x=100, top y=100 — corner touch only
+        };
+        var mgr = BuildManager(layout);
+
+        // They share a corner but no horizontal strip. Neither should be the other's Down neighbor.
+        var down = mgr.ResolveEdgeTransitionByMonitorId("PC1", "LEFT", MoveDirection.Down);
+        var up = mgr.ResolveEdgeTransitionByMonitorId("PC1", "RIGHT", MoveDirection.Up);
+
+        Assert.IsFalse(down.IsResolved, "Corner-touch monitors must not be vertically adjacent");
+        Assert.IsFalse(up.IsResolved, "Corner-touch monitors must not be vertically adjacent");
+    }
+
+    [TestMethod]
     public void SameMachine_ClosestNeighborWins()
     {
         // Three monitors A(left), B(middle), C(right) on the same machine.
