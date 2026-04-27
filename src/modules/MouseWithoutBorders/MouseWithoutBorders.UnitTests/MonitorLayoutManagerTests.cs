@@ -859,4 +859,28 @@ public sealed class MonitorLayoutManagerTests
             Assert.AreEqual(expectedRel, actualRel, 0.001, $"Proportional X for physX={physX}");
         }
     }
+
+    [TestMethod]
+    public void CrossMachine_StaleRemoteSize_DoesNotBlockDownTransition()
+    {
+        // Regression: AU001 sees Delphinium as 1920x1080 (settings value) but the actual
+        // physical size is 3456x2160 (240 DPI). The strip check used the stale 1920px width,
+        // so a cursor at physical X=2073 on DISPLAY3 (canvas 2441) fell outside [368,2286)
+        // and the Down transition to Delphinium was never resolved.
+        // Cross-machine strip checks are now skipped to avoid false negatives from stale sizes.
+        var layout = new List<MonitorLayoutInfo>
+        {
+            Mon("AU001", "DISPLAY3", 368, -4560, 3840, 2160),     // bottom edge at Y=-2400
+            Mon("DELPHINIUM", "DELPHINIUM-0", 366, -2400, 1920, 1080),  // stored size, not patched
+        };
+        var mgr = BuildManager(layout);
+
+        // physX=2073 on DISPLAY3 → canvasX = 368+2073 = 2441; stale target right edge = 366+1920 = 2286
+        // With same-machine strip check this would fail; cross-machine must always pass.
+        var r = mgr.ResolveEdgeTransitionByMonitorId("AU001", "DISPLAY3", MoveDirection.Down, 2073, 2159, 0, 0);
+
+        Assert.IsTrue(r.IsResolved, "Cross-machine down transition must succeed even when cursor X exceeds the stale stored target width");
+        Assert.AreEqual("DELPHINIUM", r.TargetMachine);
+        Assert.AreEqual("DELPHINIUM-0", r.TargetMonitorId);
+    }
 }

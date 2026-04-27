@@ -326,7 +326,13 @@ namespace MouseWithoutBorders.Class
                 canvasCursorX = src.X + (cursorX - physMonitorLeft);
                 canvasCursorY = src.Y + (cursorY - physMonitorTop);
 
-                if (direction == MoveDirection.Down || direction == MoveDirection.Up)
+                // Only apply the strip check for same-machine transitions. For
+                // cross-machine targets the stored dimensions may reflect settings values
+                // rather than the physical pixel size (DPI scaling on the remote machine
+                // can make them diverge), so the check would reject valid transitions.
+                bool sameMachine = string.Equals(src.MachineName, target.MachineName, StringComparison.OrdinalIgnoreCase);
+
+                if (sameMachine && (direction == MoveDirection.Down || direction == MoveDirection.Up))
                 {
                     // Vertical movement: cursor X must lie inside the shared horizontal strip.
                     int sharedXMin = Math.Max(src.X, target.X);
@@ -337,7 +343,7 @@ namespace MouseWithoutBorders.Class
                         return MonitorTransitionResult.NotResolved;
                     }
                 }
-                else
+                else if (sameMachine)
                 {
                     // Horizontal movement: cursor Y must lie inside the shared vertical strip.
                     int sharedYMin = Math.Max(src.Y, target.Y);
